@@ -32,7 +32,10 @@ type Client struct {
 
 // Close implements [adapter.V2RayClientTransport].
 func (c *Client) Close() error {
-
+	if c.tunnel != nil {
+		c.tunnel.Close()
+	}
+	return nil
 }
 
 func NewClient(ctx context.Context, dialer N.Dialer, serverAddr M.Socksaddr, options option.DnsttOptions, tlsConfig tls.Config) (adapter.V2RayClientTransport, error) {

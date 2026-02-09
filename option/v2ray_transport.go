@@ -21,6 +21,7 @@ type _V2RayTransportOptions struct {
 	GRPCOptions        V2RayGRPCOptions        `json:"-"`
 	HTTPUpgradeOptions V2RayHTTPUpgradeOptions `json:"-"`
 	XHTTPOptions       V2RayXHTTPOptions       `json:"-"`
+	DNSTTOptions       DnsttOptions            `json:"-"`
 }
 
 type V2RayTransportOptions _V2RayTransportOptions
@@ -40,6 +41,8 @@ func (o V2RayTransportOptions) MarshalJSON() ([]byte, error) {
 		v = o.HTTPUpgradeOptions
 	case C.V2RayTransportTypeXHTTP:
 		v = o.XHTTPOptions
+	case C.V2RayTransportTypeDNSTT:
+		v = o.DNSTTOptions
 	case "":
 		return nil, E.New("missing transport type")
 	default:

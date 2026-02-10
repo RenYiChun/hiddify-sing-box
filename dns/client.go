@@ -146,6 +146,8 @@ func (c *Client) Exchange(ctx context.Context, transport adapter.DNSTransport, m
 			if loaded {
 				select {
 				case <-cond:
+				case <-time.After(c.timeout):
+					return nil, E.New("cache wait timeout")
 				case <-ctx.Done():
 					return nil, ctx.Err()
 				}
@@ -160,6 +162,8 @@ func (c *Client) Exchange(ctx context.Context, transport adapter.DNSTransport, m
 			if loaded {
 				select {
 				case <-cond:
+				case <-time.After(c.timeout):
+					return nil, E.New("cache wait timeout")
 				case <-ctx.Done():
 					return nil, ctx.Err()
 				}

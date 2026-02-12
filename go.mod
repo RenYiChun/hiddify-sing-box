@@ -243,14 +243,15 @@ require (
 	tailscale.com v1.58.2 // indirect
 )
 
-replace github.com/sagernet/wireguard-go => github.com/hiddify/wireguard-go v0.0.0-20260207195137-b12022450359
-
-replace github.com/sagernet/tailscale => github.com/hiddify/tailscale v1.92.4-sing-box-1.13-mod.6.0.20260202223641-788aa623edeb
-
 replace github.com/sagernet/sing-dns => github.com/shtorm-7/sing-dns v0.4.6-extended-1.0.0
 
 replace github.com/ameshkov/dnscrypt/v2 => github.com/shtorm-7/dnscrypt/v2 v2.4.0-extended-1.0.0
 
-replace github.com/Psiphon-Labs/quic-go => github.com/hiddify/psiphon-quic-go v0.0.0-20260205155832-2164d1653824
+// replace github.com/sagernet/wireguard-go => github.com/hiddify/wireguard-go v0.0.0-20260207195137-b12022450359
+replace github.com/sagernet/wireguard-go => ./replace/wireguard-go
 
-replace github.com/Psiphon-Labs/psiphon-tls => github.com/hiddify/psiphon-tls v0.0.0-20260205181946-4af85c2fb9f2
+replace github.com/sagernet/tailscale => ./replace/tailscale
+
+replace github.com/Psiphon-Labs/quic-go => ./replace/psiphon-quic-go
+
+replace github.com/Psiphon-Labs/psiphon-tls => ./replace/psiphon-tls

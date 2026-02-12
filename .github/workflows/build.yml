@@ -44,6 +44,7 @@ jobs:
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5
         with:
           fetch-depth: 0
+          submodules: 'recursive'
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
@@ -113,6 +114,7 @@ jobs:
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5
         with:
           fetch-depth: 0
+          submodules: 'recursive'
       - name: Setup Go
         if: ${{ ! (matrix.legacy_win7 || matrix.legacy_go124) }}
         uses: actions/setup-go@v5
@@ -399,6 +401,7 @@ jobs:
         with:
           name: binary-${{ matrix.os }}_${{ matrix.arch }}${{ matrix.goarm && format('v{0}', matrix.goarm) }}${{ matrix.go386 && format('_{0}', matrix.go386) }}${{ matrix.gomips && format('_{0}', matrix.gomips) }}${{ matrix.legacy_name && format('-legacy-{0}', matrix.legacy_name) }}${{ matrix.variant && format('-{0}', matrix.variant) }}
           path: "dist"
+          retention-days: 1
   build_darwin:
     name: Build Darwin binaries
     if: github.event_name != 'workflow_dispatch' || inputs.build == 'All' || inputs.build == 'Binary'
@@ -416,6 +419,7 @@ jobs:
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5
         with:
           fetch-depth: 0
+          submodules: 'recursive'
       - name: Setup Go
         if: ${{ ! matrix.legacy_go124 }}
         uses: actions/setup-go@v5
@@ -473,6 +477,7 @@ jobs:
         with:
           name: binary-darwin_${{ matrix.arch }}${{ matrix.legacy_name && format('-legacy-{0}', matrix.legacy_name) }}
           path: "dist"
+          retention-days: 1
   build_windows:
     name: Build Windows binaries
     if: github.event_name != 'workflow_dispatch' || inputs.build == 'All' || inputs.build == 'Binary'
@@ -490,6 +495,7 @@ jobs:
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5
         with:
           fetch-depth: 0
+          submodules: 'recursive'
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
@@ -558,6 +564,7 @@ jobs:
         with:
           name: binary-windows_${{ matrix.arch }}
           path: "dist"
+          retention-days: 1
   build_android:
     name: Build Android
     # if: github.event_name != 'workflow_dispatch' || inputs.build == 'All' || inputs.build == 'Android'
@@ -649,6 +656,7 @@ jobs:
         with:
           name: binary-android-apks
           path: 'dist'
+          retention-days: 1
   publish_android:
 
     name: Publish Android
@@ -898,6 +906,7 @@ jobs:
         with:
           name: binary-macos-dmg
           path: 'dist'
+          retention-days: 1
   upload:
     name: Upload builds
     if: "!failure() && github.event_name == 'workflow_dispatch' && (inputs.build == 'All' || inputs.build == 'Binary' || inputs.build == 'Android' || inputs.build == 'Apple' || inputs.build == 'macOS-standalone')"
@@ -914,6 +923,7 @@ jobs:
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5
         with:
           fetch-depth: 0
+          submodules: 'recursive'
       - name: Cache ghr
         uses: actions/cache@v4
         id: cache-ghr

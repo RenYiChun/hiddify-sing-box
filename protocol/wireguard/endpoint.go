@@ -10,6 +10,7 @@ import (
 	"github.com/sagernet/sing-box/adapter/endpoint"
 	"github.com/sagernet/sing-box/common/dialer"
 	"github.com/sagernet/sing-box/common/monitoring"
+	"github.com/sagernet/sing-box/common/urltest"
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
@@ -133,7 +134,7 @@ func (w *Endpoint) readyChecker() {
 		w.started = true
 		monitoring.Get(w.ctx).TestNow(w.Tag())
 	}()
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 30; i++ {
 		if w.IsReady() {
 			return
 		}
@@ -142,7 +143,14 @@ func (w *Endpoint) readyChecker() {
 			return
 		case <-time.After(time.Second):
 		}
+		ctx, cancel := context.WithTimeout(w.ctx, time.Second*5)
+		res, err := urltest.URLTest(ctx, "https://1.1.1.1", w)
+		cancel()
+		if res > 0 && res < 10000 && err == nil {
+			return
+		}
 	}
+
 }
 func (w *Endpoint) IsReady() bool {
 	return w.started
@@ -271,4 +279,12 @@ func (w *Endpoint) PreferredAddress(address netip.Addr) bool {
 
 func (w *Endpoint) NewDirectRouteConnection(metadata adapter.InboundContext, routeContext tun.DirectRouteContext, timeout time.Duration) (tun.DirectRouteDestination, error) {
 	return w.endpoint.NewDirectRouteConnection(metadata, routeContext, timeout)
+}
+
+func (w *Endpoint) DisplayType() string {
+	str := "⚠️ Connecting..."
+	if w.IsReady() {
+		str = ""
+	}
+	return C.ProxyDisplayName(w.Type()) + " " + str
 }

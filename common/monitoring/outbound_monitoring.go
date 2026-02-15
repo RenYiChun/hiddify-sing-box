@@ -930,9 +930,9 @@ func (m *OutboundMonitoring) groupNotifierLoop(grp *groupState) {
 			}
 			return
 		case <-grp.notifyCh:
-			if !m.cacheDirty.Load() {
-				continue
-			}
+			// if !m.cacheDirty.Load() {
+			// 	continue
+			// }
 			if timer == nil {
 				timer = time.NewTimer(m.debounceWindow)
 				timerCh = timer.C

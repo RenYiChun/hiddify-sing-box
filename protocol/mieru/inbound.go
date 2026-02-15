@@ -67,7 +67,7 @@ func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLo
 	inboundInstance.listener = listener.New(listener.Options{
 		Context: ctx,
 		Logger:  logger,
-		Network: []string{N.NetworkTCP, N.NetworkUDP},
+		Network: options.Network.Build(),
 		Listen:  options.ListenOptions,
 	})
 
@@ -267,22 +267,15 @@ func buildMieruServerConfig(_ context.Context, options option.MieruInboundOption
 		return nil, nil, fmt.Errorf("failed to validate mieru options: %w", err)
 	}
 
-	var transportProtocol *mierupb.TransportProtocol
-	switch options.Transport {
-	case "TCP":
-		transportProtocol = mierupb.TransportProtocol_TCP.Enum()
-	case "UDP":
-		transportProtocol = mierupb.TransportProtocol_UDP.Enum()
-	}
+	portBindings := []*mierupb.PortBinding{}
 
-	if options.ListenOptions.ListenPort == 0 {
-		return nil, nil, E.New("listen_port must be set")
-	}
-	portBindings := []*mierupb.PortBinding{
-		{
-			Port:     proto.Int32(int32(options.ListenOptions.ListenPort)),
-			Protocol: transportProtocol,
-		},
+	for _, pr := range options.TransportInfo {
+		intport := int32(pr.Port)
+		portBindings = append(portBindings, &mierupb.PortBinding{
+			PortRange: &pr.PortRange,
+			Port:      &intport,
+			Protocol:  getTransportProtocol(pr.Transport),
+		})
 	}
 
 	var users []*mierupb.User
@@ -304,8 +297,11 @@ func buildMieruServerConfig(_ context.Context, options option.MieruInboundOption
 }
 
 func validateMieruInboundOptions(options option.MieruInboundOptions) error {
-	if options.Transport != "TCP" && options.Transport != "UDP" {
-		return E.New("transport must be TCP or UDP")
+	if options.ListenPort == 0 && len(options.TransportInfo) == 0 {
+		return fmt.Errorf("either server_port or transport must be set")
+	}
+	if options.ListenPort != 0 && (len(options.TransportInfo) != 1 || options.TransportInfo[0].Port != options.ListenPort) {
+		return fmt.Errorf("Transport of Server Port is not defined!")
 	}
 	if len(options.Users) == 0 {
 		return E.New("users is empty")
@@ -318,5 +314,6 @@ func validateMieruInboundOptions(options option.MieruInboundOptions) error {
 			return E.New("password is empty")
 		}
 	}
-	return nil
+
+	return validateMieruTransport(options.TransportInfo)
 }

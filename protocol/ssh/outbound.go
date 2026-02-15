@@ -23,6 +23,7 @@ import (
 	"github.com/sagernet/sing/common/logger"
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
+	"github.com/sagernet/sing/common/uot"
 
 	"golang.org/x/crypto/ssh"
 )
@@ -47,6 +48,7 @@ type Outbound struct {
 	clientAccess      sync.Mutex
 	clientConn        net.Conn
 	client            *ssh.Client
+	uotClient         *uot.Client
 }
 
 func NewOutbound(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag string, options option.SSHOutboundOptions) (adapter.Outbound, error) {
@@ -54,8 +56,9 @@ func NewOutbound(ctx context.Context, router adapter.Router, logger log.ContextL
 	if err != nil {
 		return nil, err
 	}
+
 	outbound := &Outbound{
-		Adapter:           outbound.NewAdapterWithDialerOptions(C.TypeSSH, tag, []string{N.NetworkTCP}, options.DialerOptions),
+		Adapter:           outbound.NewAdapterWithDialerOptions(C.TypeSSH, tag, options.Network.Build(), options.DialerOptions),
 		ctx:               ctx,
 		logger:            logger,
 		dialer:            outboundDialer,
@@ -106,6 +109,13 @@ func NewOutbound(ctx context.Context, router adapter.Router, logger log.ContextL
 				return nil, E.New("parse host key ", key)
 			}
 			outbound.hostKey = append(outbound.hostKey, key)
+		}
+	}
+	uotOptions := common.PtrValueOrDefault(options.UDPOverTCP)
+	if uotOptions.Enabled {
+		outbound.uotClient = &uot.Client{
+			Dialer:  outbound,
+			Version: uotOptions.Version,
 		}
 	}
 	return outbound, nil
@@ -187,9 +197,25 @@ func (s *Outbound) Close() error {
 }
 
 func (s *Outbound) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+	ctx, metadata := adapter.ExtendContext(ctx)
+	metadata.Outbound = s.Tag()
+	metadata.Destination = destination
 	client, err := s.connect()
 	if err != nil {
 		return nil, err
+	}
+
+	switch N.NetworkName(network) {
+
+	case N.NetworkTCP:
+		s.logger.InfoContext(ctx, "outbound connection to ", destination)
+	case N.NetworkUDP:
+		if s.uotClient != nil {
+			s.logger.InfoContext(ctx, "outbound UoT connect packet connection to ", destination)
+			return s.uotClient.DialContext(ctx, network, destination)
+		} else {
+			s.logger.InfoContext(ctx, "outbound packet connection to ", destination)
+		}
 	}
 	conn, err := client.Dial(network, destination.String())
 	if err != nil {
@@ -199,6 +225,16 @@ func (s *Outbound) DialContext(ctx context.Context, network string, destination 
 }
 
 func (s *Outbound) ListenPacket(ctx context.Context, destination M.Socksaddr) (net.PacketConn, error) {
+	ctx, metadata := adapter.ExtendContext(ctx)
+	metadata.Outbound = s.Tag()
+	metadata.Destination = destination
+	if s.uotClient != nil {
+		s.logger.InfoContext(ctx, "outbound UoT packet connection to ", destination)
+		return s.uotClient.ListenPacket(ctx, destination)
+	} else {
+		s.logger.InfoContext(ctx, "outbound packet connection to ", destination)
+	}
+
 	return nil, os.ErrInvalid
 }
 

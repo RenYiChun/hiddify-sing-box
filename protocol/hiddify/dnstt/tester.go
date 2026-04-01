@@ -193,7 +193,7 @@ func (h *Outbound) testTunnelResolver(resolver dnstt.Resolver) (rate int, err er
 
 	ctx, cancel := context.WithTimeout(h.ctx, 5*time.Second)
 	defer cancel()
-	tunnel, err := h.createDnsttTunnel(ctx, resolver)
+	tunnel, err := h.createDnsttTunnel(ctx, []dnstt.Resolver{resolver})
 	if err != nil {
 		h.logger.WarnContext(h.ctx, "failed to establish tunnel to resolver ", resolver.ResolverAddr, ": ", err)
 		return -2, err

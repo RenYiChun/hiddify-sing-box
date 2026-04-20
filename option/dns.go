@@ -3,19 +3,14 @@ package option
 import (
 	"context"
 	"net/netip"
-	"net/url"
 
 	C "github.com/sagernet/sing-box/constant"
-	"github.com/sagernet/sing-box/experimental/deprecated"
-	"github.com/sagernet/sing/common"
 	E "github.com/sagernet/sing/common/exceptions"
 	"github.com/sagernet/sing/common/json"
 	"github.com/sagernet/sing/common/json/badjson"
 	"github.com/sagernet/sing/common/json/badoption"
 	M "github.com/sagernet/sing/common/metadata"
 	"github.com/sagernet/sing/service"
-
-	"github.com/miekg/dns"
 )
 
 type RawDNSOptions struct {
@@ -26,80 +21,29 @@ type RawDNSOptions struct {
 	DNSClientOptions
 }
 
-type LegacyDNSOptions struct {
-	FakeIP *LegacyDNSFakeIPOptions `json:"fakeip,omitempty"`
-}
-
 type DNSOptions struct {
 	RawDNSOptions
-	LegacyDNSOptions
 }
 
-type contextKeyDontUpgrade struct{}
+const (
+	legacyDNSFakeIPRemovedMessage = "legacy DNS fakeip options are deprecated in sing-box 1.12.0 and removed in sing-box 1.14.0, checkout migration: https://sing-box.sagernet.org/migration/#migrate-to-new-dns-server-formats"
+	legacyDNSServerRemovedMessage = "legacy DNS server formats are deprecated in sing-box 1.12.0 and removed in sing-box 1.14.0, checkout migration: https://sing-box.sagernet.org/migration/#migrate-to-new-dns-server-formats"
+)
 
-func ContextWithDontUpgrade(ctx context.Context) context.Context {
-	return context.WithValue(ctx, (*contextKeyDontUpgrade)(nil), true)
-}
-
-func dontUpgradeFromContext(ctx context.Context) bool {
-	return ctx.Value((*contextKeyDontUpgrade)(nil)) == true
+type removedLegacyDNSOptions struct {
+	FakeIP json.RawMessage `json:"fakeip,omitempty"`
 }
 
 func (o *DNSOptions) UnmarshalJSONContext(ctx context.Context, content []byte) error {
-	err := json.UnmarshalContext(ctx, content, &o.LegacyDNSOptions)
+	var legacyOptions removedLegacyDNSOptions
+	err := json.UnmarshalContext(ctx, content, &legacyOptions)
 	if err != nil {
 		return err
 	}
-	dontUpgrade := dontUpgradeFromContext(ctx)
-	legacyOptions := o.LegacyDNSOptions
-	if !dontUpgrade {
-		if o.FakeIP != nil && o.FakeIP.Enabled {
-			deprecated.Report(ctx, deprecated.OptionLegacyDNSFakeIPOptions)
-			ctx = context.WithValue(ctx, (*LegacyDNSFakeIPOptions)(nil), o.FakeIP)
-		}
-		o.LegacyDNSOptions = LegacyDNSOptions{}
+	if len(legacyOptions.FakeIP) != 0 {
+		return E.New(legacyDNSFakeIPRemovedMessage)
 	}
-	err = badjson.UnmarshallExcludedContext(ctx, content, legacyOptions, &o.RawDNSOptions)
-	if err != nil {
-		return err
-	}
-	if !dontUpgrade {
-		rcodeMap := make(map[string]int)
-		o.Servers = common.Filter(o.Servers, func(it DNSServerOptions) bool {
-			if it.Type == C.DNSTypeLegacyRcode {
-				rcodeMap[it.Tag] = it.Options.(int)
-				return false
-			}
-			return true
-		})
-		if len(rcodeMap) > 0 {
-			for i := 0; i < len(o.Rules); i++ {
-				rewriteRcode(rcodeMap, &o.Rules[i])
-			}
-		}
-	}
-	return nil
-}
-
-func rewriteRcode(rcodeMap map[string]int, rule *DNSRule) {
-	switch rule.Type {
-	case C.RuleTypeDefault:
-		rewriteRcodeAction(rcodeMap, &rule.DefaultOptions.DNSRuleAction)
-	case C.RuleTypeLogical:
-		rewriteRcodeAction(rcodeMap, &rule.LogicalOptions.DNSRuleAction)
-	}
-}
-
-func rewriteRcodeAction(rcodeMap map[string]int, ruleAction *DNSRuleAction) {
-	if ruleAction.Action != C.RuleActionTypeRoute {
-		return
-	}
-	rcode, loaded := rcodeMap[ruleAction.RouteOptions.Server]
-	if !loaded {
-		return
-	}
-	ruleAction.Action = C.RuleActionTypePredefined
-	ruleAction.PredefinedOptions.Rcode = common.Ptr(DNSRCode(rcode))
+	return badjson.UnmarshallExcludedContext(ctx, content, legacyOptions, &o.RawDNSOptions)
 }
 
 type DNSClientOptions struct {
@@ -108,13 +52,30 @@ type DNSClientOptions struct {
 	DisableExpire    bool                  `json:"disable_expire,omitempty"`
 	IndependentCache bool                  `json:"independent_cache,omitempty"`
 	CacheCapacity    uint32                `json:"cache_capacity,omitempty"`
+	Optimistic       *OptimisticDNSOptions `json:"optimistic,omitempty"`
 	ClientSubnet     *badoption.Prefixable `json:"client_subnet,omitempty"`
 }
 
-type LegacyDNSFakeIPOptions struct {
-	Enabled    bool              `json:"enabled,omitempty"`
-	Inet4Range *badoption.Prefix `json:"inet4_range,omitempty"`
-	Inet6Range *badoption.Prefix `json:"inet6_range,omitempty"`
+type _OptimisticDNSOptions struct {
+	Enabled bool               `json:"enabled,omitempty"`
+	Timeout badoption.Duration `json:"timeout,omitempty"`
+}
+
+type OptimisticDNSOptions _OptimisticDNSOptions
+
+func (o OptimisticDNSOptions) MarshalJSON() ([]byte, error) {
+	if o.Timeout == 0 {
+		return json.Marshal(o.Enabled)
+	}
+	return json.Marshal((_OptimisticDNSOptions)(o))
+}
+
+func (o *OptimisticDNSOptions) UnmarshalJSON(bytes []byte) error {
+	err := json.Unmarshal(bytes, &o.Enabled)
+	if err == nil {
+		return nil
+	}
+	return json.UnmarshalDisallowUnknownFields(bytes, (*_OptimisticDNSOptions)(o))
 }
 
 type DNSTransportOptionsRegistry interface {
@@ -129,10 +90,6 @@ type _DNSServerOptions struct {
 type DNSServerOptions _DNSServerOptions
 
 func (o *DNSServerOptions) MarshalJSONContext(ctx context.Context) ([]byte, error) {
-	switch o.Type {
-	case C.DNSTypeLegacy:
-		o.Type = ""
-	}
 	return badjson.MarshallObjectsContext(ctx, (*_DNSServerOptions)(o), o.Options)
 }
 
@@ -148,9 +105,7 @@ func (o *DNSServerOptions) UnmarshalJSONContext(ctx context.Context, content []b
 	var options any
 	switch o.Type {
 	case "", C.DNSTypeLegacy:
-		o.Type = C.DNSTypeLegacy
-		options = new(LegacyDNSServerOptions)
-		deprecated.Report(ctx, deprecated.OptionLegacyDNSTransport)
+		return E.New(legacyDNSServerRemovedMessage)
 	default:
 		var loaded bool
 		options, loaded = registry.CreateOptions(o.Type)
@@ -352,7 +307,7 @@ func (o DNSServerAddressOptions) Build() M.Socksaddr {
 }
 
 func (o DNSServerAddressOptions) ServerIsDomain() bool {
-	return M.IsDomainName(o.Server)
+	return o.Build().IsDomain()
 }
 
 func (o *DNSServerAddressOptions) TakeServerOptions() ServerOptions {
@@ -363,16 +318,6 @@ func (o *DNSServerAddressOptions) ReplaceServerOptions(options ServerOptions) {
 	*o = DNSServerAddressOptions(options)
 }
 
-type LegacyDNSServerOptions struct {
-	Address              string                `json:"address"`
-	AddressResolver      string                `json:"address_resolver,omitempty"`
-	AddressStrategy      DomainStrategy        `json:"address_strategy,omitempty"`
-	AddressFallbackDelay badoption.Duration    `json:"address_fallback_delay,omitempty"`
-	Strategy             DomainStrategy        `json:"strategy,omitempty"`
-	Detour               string                `json:"detour,omitempty"`
-	ClientSubnet         *badoption.Prefixable `json:"client_subnet,omitempty"`
-}
-
 type HostsDNSServerOptions struct {
 	Path       badoption.Listable[string]                                `json:"path,omitempty"`
 	Predefined *badjson.TypedMap[string, badoption.Listable[netip.Addr]] `json:"predefined,omitempty"`
@@ -380,10 +325,6 @@ type HostsDNSServerOptions struct {
 
 type RawLocalDNSServerOptions struct {
 	DialerOptions
-	Legacy              bool           `json:"-"`
-	LegacyStrategy      DomainStrategy `json:"-"`
-	LegacyDefaultDialer bool           `json:"-"`
-	LegacyClientSubnet  netip.Prefix   `json:"-"`
 }
 
 type LocalDNSServerOptions struct {
@@ -394,9 +335,6 @@ type LocalDNSServerOptions struct {
 type RemoteDNSServerOptions struct {
 	RawLocalDNSServerOptions
 	DNSServerAddressOptions
-	LegacyAddressResolver      string             `json:"-"`
-	LegacyAddressStrategy      DomainStrategy     `json:"-"`
-	LegacyAddressFallbackDelay badoption.Duration `json:"-"`
 }
 
 type RemoteTLSDNSServerOptions struct {

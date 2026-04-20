@@ -1,6 +1,7 @@
 package option
 
 import (
+	"context"
 	"reflect"
 
 	C "github.com/sagernet/sing-box/constant"
@@ -33,26 +34,24 @@ func (r Rule) MarshalJSON() ([]byte, error) {
 	return badjson.MarshallObjects((_Rule)(r), v)
 }
 
-func (r *Rule) UnmarshalJSON(bytes []byte) error {
-	err := json.Unmarshal(bytes, (*_Rule)(r))
+func (r *Rule) UnmarshalJSONContext(ctx context.Context, bytes []byte) error {
+	err := json.UnmarshalContext(ctx, bytes, (*_Rule)(r))
 	if err != nil {
 		return err
 	}
-	var v any
+	payload, err := rulePayloadWithoutType(ctx, bytes)
+	if err != nil {
+		return err
+	}
 	switch r.Type {
 	case "", C.RuleTypeDefault:
 		r.Type = C.RuleTypeDefault
-		v = &r.DefaultOptions
+		return unmarshalDefaultRuleContext(ctx, payload, &r.DefaultOptions)
 	case C.RuleTypeLogical:
-		v = &r.LogicalOptions
+		return unmarshalLogicalRuleContext(ctx, payload, &r.LogicalOptions)
 	default:
 		return E.New("unknown rule type: " + r.Type)
 	}
-	err = badjson.UnmarshallExcluded(bytes, (*_Rule)(r), v)
-	if err != nil {
-		return err
-	}
-	return nil
 }
 
 func (r Rule) IsValid() bool {
@@ -67,52 +66,55 @@ func (r Rule) IsValid() bool {
 }
 
 type RawDefaultRule struct {
-	Inbound                  badoption.Listable[string]        `json:"inbound,omitempty"`
-	IPVersion                int                               `json:"ip_version,omitempty"`
-	Network                  badoption.Listable[string]        `json:"network,omitempty"`
-	AuthUser                 badoption.Listable[string]        `json:"auth_user,omitempty"`
-	Protocol                 badoption.Listable[string]        `json:"protocol,omitempty"`
-	Client                   badoption.Listable[string]        `json:"client,omitempty"`
-	Domain                   badoption.Listable[string]        `json:"domain,omitempty"`
-	DomainSuffix             badoption.Listable[string]        `json:"domain_suffix,omitempty"`
-	DomainKeyword            badoption.Listable[string]        `json:"domain_keyword,omitempty"`
-	DomainRegex              badoption.Listable[string]        `json:"domain_regex,omitempty"`
-	Geosite                  badoption.Listable[string]        `json:"geosite,omitempty"`
-	SourceGeoIP              badoption.Listable[string]        `json:"source_geoip,omitempty"`
-	GeoIP                    badoption.Listable[string]        `json:"geoip,omitempty"`
-	SourceIPCIDR             badoption.Listable[string]        `json:"source_ip_cidr,omitempty"`
-	SourceIPIsPrivate        bool                              `json:"source_ip_is_private,omitempty"`
-	IPCIDR                   badoption.Listable[string]        `json:"ip_cidr,omitempty"`
-	IPIsPrivate              bool                              `json:"ip_is_private,omitempty"`
-	SourcePort               badoption.Listable[uint16]        `json:"source_port,omitempty"`
-	SourcePortRange          badoption.Listable[string]        `json:"source_port_range,omitempty"`
-	Port                     badoption.Listable[uint16]        `json:"port,omitempty"`
-	PortRange                badoption.Listable[string]        `json:"port_range,omitempty"`
-	ProcessName              badoption.Listable[string]        `json:"process_name,omitempty"`
-	ProcessPath              badoption.Listable[string]        `json:"process_path,omitempty"`
-	ProcessPathRegex         badoption.Listable[string]        `json:"process_path_regex,omitempty"`
-	PackageName              badoption.Listable[string]        `json:"package_name,omitempty"`
-	User                     badoption.Listable[string]        `json:"user,omitempty"`
-	UserID                   badoption.Listable[int32]         `json:"user_id,omitempty"`
-	ClashMode                string                            `json:"clash_mode,omitempty"`
-	NetworkType              badoption.Listable[InterfaceType] `json:"network_type,omitempty"`
-	NetworkIsExpensive       bool                              `json:"network_is_expensive,omitempty"`
-	NetworkIsConstrained     bool                              `json:"network_is_constrained,omitempty"`
-	WIFISSID                 badoption.Listable[string]        `json:"wifi_ssid,omitempty"`
-	WIFIBSSID                badoption.Listable[string]        `json:"wifi_bssid,omitempty"`
-	RuleSet                  badoption.Listable[string]        `json:"rule_set,omitempty"`
-	RuleSetIPCIDRMatchSource bool                              `json:"rule_set_ip_cidr_match_source,omitempty"`
-	Invert                   bool                              `json:"invert,omitempty"`
+	Inbound                  badoption.Listable[string]                                                  `json:"inbound,omitempty"`
+	IPVersion                int                                                                         `json:"ip_version,omitempty"`
+	Network                  badoption.Listable[string]                                                  `json:"network,omitempty"`
+	AuthUser                 badoption.Listable[string]                                                  `json:"auth_user,omitempty"`
+	Protocol                 badoption.Listable[string]                                                  `json:"protocol,omitempty"`
+	Client                   badoption.Listable[string]                                                  `json:"client,omitempty"`
+	Domain                   badoption.Listable[string]                                                  `json:"domain,omitempty"`
+	DomainSuffix             badoption.Listable[string]                                                  `json:"domain_suffix,omitempty"`
+	DomainKeyword            badoption.Listable[string]                                                  `json:"domain_keyword,omitempty"`
+	DomainRegex              badoption.Listable[string]                                                  `json:"domain_regex,omitempty"`
+	Geosite                  badoption.Listable[string]                                                  `json:"geosite,omitempty"`
+	SourceGeoIP              badoption.Listable[string]                                                  `json:"source_geoip,omitempty"`
+	GeoIP                    badoption.Listable[string]                                                  `json:"geoip,omitempty"`
+	SourceIPCIDR             badoption.Listable[string]                                                  `json:"source_ip_cidr,omitempty"`
+	SourceIPIsPrivate        bool                                                                        `json:"source_ip_is_private,omitempty"`
+	IPCIDR                   badoption.Listable[string]                                                  `json:"ip_cidr,omitempty"`
+	IPIsPrivate              bool                                                                        `json:"ip_is_private,omitempty"`
+	SourcePort               badoption.Listable[uint16]                                                  `json:"source_port,omitempty"`
+	SourcePortRange          badoption.Listable[string]                                                  `json:"source_port_range,omitempty"`
+	Port                     badoption.Listable[uint16]                                                  `json:"port,omitempty"`
+	PortRange                badoption.Listable[string]                                                  `json:"port_range,omitempty"`
+	ProcessName              badoption.Listable[string]                                                  `json:"process_name,omitempty"`
+	ProcessPath              badoption.Listable[string]                                                  `json:"process_path,omitempty"`
+	ProcessPathRegex         badoption.Listable[string]                                                  `json:"process_path_regex,omitempty"`
+	PackageName              badoption.Listable[string]                                                  `json:"package_name,omitempty"`
+	PackageNameRegex         badoption.Listable[string]                                                  `json:"package_name_regex,omitempty"`
+	User                     badoption.Listable[string]                                                  `json:"user,omitempty"`
+	UserID                   badoption.Listable[int32]                                                   `json:"user_id,omitempty"`
+	ClashMode                string                                                                      `json:"clash_mode,omitempty"`
+	NetworkType              badoption.Listable[InterfaceType]                                           `json:"network_type,omitempty"`
+	NetworkIsExpensive       bool                                                                        `json:"network_is_expensive,omitempty"`
+	NetworkIsConstrained     bool                                                                        `json:"network_is_constrained,omitempty"`
+	WIFISSID                 badoption.Listable[string]                                                  `json:"wifi_ssid,omitempty"`
+	WIFIBSSID                badoption.Listable[string]                                                  `json:"wifi_bssid,omitempty"`
+	InterfaceAddress         *badjson.TypedMap[string, badoption.Listable[*badoption.Prefixable]]        `json:"interface_address,omitempty"`
+	NetworkInterfaceAddress  *badjson.TypedMap[InterfaceType, badoption.Listable[*badoption.Prefixable]] `json:"network_interface_address,omitempty"`
+	DefaultInterfaceAddress  badoption.Listable[*badoption.Prefixable]                                   `json:"default_interface_address,omitempty"`
+	SourceMACAddress         badoption.Listable[string]                                                  `json:"source_mac_address,omitempty"`
+	SourceHostname           badoption.Listable[string]                                                  `json:"source_hostname,omitempty"`
+	PreferredBy              badoption.Listable[string]                                                  `json:"preferred_by,omitempty"`
+	RuleSet                  badoption.Listable[string]                                                  `json:"rule_set,omitempty"`
+	RuleSetIPCIDRMatchSource bool                                                                        `json:"rule_set_ip_cidr_match_source,omitempty"`
+	Invert                   bool                                                                        `json:"invert,omitempty"`
 
 	// Deprecated: renamed to rule_set_ip_cidr_match_source
 	Deprecated_RulesetIPCIDRMatchSource bool `json:"rule_set_ipcidr_match_source,omitempty"`
 
-	TunnelSource            badoption.Listable[string]                                                  `json:"tunnel_source,omitempty"`             //E
-	TunnelDestination       badoption.Listable[string]                                                  `json:"tunnel_destination,omitempty"`        //E
-	InterfaceAddress        *badjson.TypedMap[string, badoption.Listable[*badoption.Prefixable]]        `json:"interface_address,omitempty"`         //E
-	NetworkInterfaceAddress *badjson.TypedMap[InterfaceType, badoption.Listable[*badoption.Prefixable]] `json:"network_interface_address,omitempty"` //E
-	DefaultInterfaceAddress badoption.Listable[*badoption.Prefixable]                                   `json:"default_interface_address,omitempty"` //E
-	PreferredBy             badoption.Listable[string]                                                  `json:"preferred_by,omitempty"`              //E
+	TunnelSource      badoption.Listable[string] `json:"tunnel_source,omitempty"`      //E
+	TunnelDestination badoption.Listable[string] `json:"tunnel_destination,omitempty"` //E
 
 }
 
@@ -160,6 +162,64 @@ func (r *LogicalRule) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	return badjson.UnmarshallExcluded(data, &r.RawLogicalRule, &r.RuleAction)
+}
+
+func rulePayloadWithoutType(ctx context.Context, data []byte) ([]byte, error) {
+	var content badjson.JSONObject
+	err := content.UnmarshalJSONContext(ctx, data)
+	if err != nil {
+		return nil, err
+	}
+	content.Remove("type")
+	return content.MarshalJSONContext(ctx)
+}
+
+func unmarshalDefaultRuleContext(ctx context.Context, data []byte, rule *DefaultRule) error {
+	rawAction, routeOptions, err := inspectRouteRuleAction(ctx, data)
+	if err != nil {
+		return err
+	}
+	err = rejectNestedRouteRuleAction(ctx, data)
+	if err != nil {
+		return err
+	}
+	depth := nestedRuleDepth(ctx)
+	err = json.UnmarshalContext(ctx, data, &rule.RawDefaultRule)
+	if err != nil {
+		return err
+	}
+	err = badjson.UnmarshallExcludedContext(ctx, data, &rule.RawDefaultRule, &rule.RuleAction)
+	if err != nil {
+		return err
+	}
+	if depth > 0 && rawAction == "" && routeOptions == (RouteActionOptions{}) {
+		rule.RuleAction = RuleAction{}
+	}
+	return nil
+}
+
+func unmarshalLogicalRuleContext(ctx context.Context, data []byte, rule *LogicalRule) error {
+	rawAction, routeOptions, err := inspectRouteRuleAction(ctx, data)
+	if err != nil {
+		return err
+	}
+	err = rejectNestedRouteRuleAction(ctx, data)
+	if err != nil {
+		return err
+	}
+	depth := nestedRuleDepth(ctx)
+	err = json.UnmarshalContext(nestedRuleChildContext(ctx), data, &rule.RawLogicalRule)
+	if err != nil {
+		return err
+	}
+	err = badjson.UnmarshallExcludedContext(ctx, data, &rule.RawLogicalRule, &rule.RuleAction)
+	if err != nil {
+		return err
+	}
+	if depth > 0 && rawAction == "" && routeOptions == (RouteActionOptions{}) {
+		rule.RuleAction = RuleAction{}
+	}
+	return nil
 }
 
 func (r *LogicalRule) IsValid() bool {

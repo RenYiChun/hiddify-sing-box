@@ -7,6 +7,10 @@ icon: material/new-box
     :material-plus: [bypass](#bypass)  
     :material-alert: [reject](#reject)
 
+!!! quote "sing-box 1.14.0 中的更改"
+
+    :material-plus: [resolve.disable_optimistic_cache](#disable_optimistic_cache)
+
 !!! quote "sing-box 1.12.0 中的更改"
 
     :material-plus: [tls_fragment](#tls_fragment)  
@@ -66,7 +70,7 @@ icon: material/new-box
 
 目标出站的标签。
 
-如果未指定，规则仅在来自 auto redirect 的[预匹配](/configuration/shared/pre-match/)中匹配，在其他场景中将被跳过。
+如果未指定，规则仅在来自 auto redirect 的[预匹配](/zh/configuration/shared/pre-match/)中匹配，在其他场景中将被跳过。
 
 #### route-options 字段
 
@@ -134,7 +138,10 @@ icon: material/new-box
   "fallback_delay": "",
   "udp_disable_domain_unmapping": false,
   "udp_connect": false,
-  "udp_timeout": ""
+  "udp_timeout": "",
+  "tls_fragment": false,
+  "tls_fragment_fallback_delay": "",
+  "tls_record_fragment": false
 }
 ```
 
@@ -154,22 +161,22 @@ icon: material/new-box
 
 #### network_strategy
 
-详情参阅 [拨号字段](/configuration/shared/dial/#network_strategy)。
+详情参阅 [拨号字段](/zh/configuration/shared/dial/#network_strategy)。
 
 仅当出站为 `direct` 且 `outbound.bind_interface`, `outbound.inet4_bind_address`
 且 `outbound.inet6_bind_address` 未设置时生效。
 
 #### network_type
 
-详情参阅 [拨号字段](/configuration/shared/dial/#network_type)。
+详情参阅 [拨号字段](/zh/configuration/shared/dial/#network_type)。
 
 #### fallback_network_type
 
-详情参阅 [拨号字段](/configuration/shared/dial/#fallback_network_type)。
+详情参阅 [拨号字段](/zh/configuration/shared/dial/#fallback_network_type)。
 
 #### fallback_delay
 
-详情参阅 [拨号字段](/configuration/shared/dial/#fallback_delay)。
+详情参阅 [拨号字段](/zh/configuration/shared/dial/#fallback_delay)。
 
 #### udp_disable_domain_unmapping
 
@@ -268,6 +275,7 @@ UDP 连接超时时间。
   "server": "",
   "strategy": "",
   "disable_cache": false,
+  "disable_optimistic_cache": false,
   "rewrite_ttl": null,
   "client_subnet": null
 }
@@ -290,6 +298,12 @@ DNS 解析策略，可用值有：`prefer_ipv4`、`prefer_ipv6`、`ipv4_only`、
 !!! question "自 sing-box 1.12.0 起"
 
 在此查询中禁用缓存。
+
+#### disable_optimistic_cache
+
+!!! question "自 sing-box 1.14.0 起"
+
+在此查询中禁用乐观 DNS 缓存。
 
 #### rewrite_ttl
 

@@ -681,10 +681,6 @@ func (s *Box) Endpoint() adapter.EndpointManager {
 	return s.endpoint
 }
 
-func (s *Box) Endpoint() adapter.EndpointManager {
-	return s.endpoint
-}
-
 func (s *Box) LogFactory() log.Factory {
 	return s.logFactory
 }

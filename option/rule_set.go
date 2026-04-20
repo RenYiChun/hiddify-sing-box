@@ -218,10 +218,8 @@ type DefaultHeadlessRule struct {
 	AdGuardDomain        badoption.Listable[string] `json:"-"`
 	AdGuardDomainMatcher *domain.AdGuardMatcher     `json:"-"`
 
-	TunnelSource            badoption.Listable[string]                                                  `json:"tunnel_source,omitempty"`             //E
-	TunnelDestination       badoption.Listable[string]                                                  `json:"tunnel_destination,omitempty"`        //E
-	NetworkInterfaceAddress *badjson.TypedMap[InterfaceType, badoption.Listable[*badoption.Prefixable]] `json:"network_interface_address,omitempty"` //E
-	DefaultInterfaceAddress badoption.Listable[*badoption.Prefixable]                                   `json:"default_interface_address,omitempty"` //E
+	TunnelSource      badoption.Listable[string] `json:"tunnel_source,omitempty"`      //E
+	TunnelDestination badoption.Listable[string] `json:"tunnel_destination,omitempty"` //E
 
 }
 

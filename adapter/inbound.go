@@ -70,7 +70,10 @@ type InboundContext struct {
 	InboundDetour             string
 	LastInbound               string
 	OriginDestination         M.Socksaddr
-	RouteOriginalDestination  M.Socksaddr
+	RouteOriginalDestination M.Socksaddr
+	// Deprecated: to be removed
+	//nolint:staticcheck
+	InboundOptions            option.InboundOptions
 	UDPDisableDomainUnmapping bool
 	UDPConnect                bool
 	UDPTimeout                time.Duration

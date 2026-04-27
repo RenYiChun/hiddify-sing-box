@@ -45,6 +45,7 @@ import (
 	"github.com/sagernet/sing-box/protocol/vless"
 	"github.com/sagernet/sing-box/protocol/vmess"
 	"github.com/sagernet/sing-box/service/resolved"
+	smartdnspool "github.com/sagernet/sing-box/service/smart_dns_pool"
 	"github.com/sagernet/sing-box/service/ssmapi"
 	E "github.com/sagernet/sing/common/exceptions"
 )
@@ -157,6 +158,7 @@ func ServiceRegistry() *service.Registry {
 
 	resolved.RegisterService(registry)
 	ssmapi.RegisterService(registry)
+	smartdnspool.RegisterService(registry) //H
 
 	registerDERPService(registry)
 	registerCCMService(registry)

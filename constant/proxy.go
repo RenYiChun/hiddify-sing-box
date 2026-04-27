@@ -42,6 +42,7 @@ const (
 	TypeAwg            = "awg"      //H
 	TypeBalancer       = "balancer" //H
 	TypeDNSTT          = "dnstt"    //H
+	TypeSmartDNSPool   = "smart_dns_pool" //H — local recursive-resolver pool with AIMD throttling + recovery probing (github.com/hiddify/hmrd_multi_resolver_dns)
 )
 
 const (

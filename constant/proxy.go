@@ -40,11 +40,11 @@ const (
 	TypeACME               = "acme"
 	TypeCloudflareOriginCA = "cloudflare-origin-ca"
 
-	TypeHInvalidConfig = "hinvalid" //H
-	TypeXray           = "xray"     //H
-	TypeCustom         = "custom"   //H
-	TypeAwg            = "awg"      //H
-	TypeBalancer       = "balancer" //H
+	TypeHInvalidConfig = "hinvalid"   //H
+	TypeXray           = "xray"       //H
+	TypeCustom         = "custom"     //H
+	TypeAwg            = "awg"        //H
+	TypeBalancer       = "balancer"   //H
 	TypeDNSTT          = "dnstt"      //H
 	TypeGooseRelay     = "gooserelay" //H
 )

@@ -22,6 +22,7 @@ type CacheFileOptions struct {
 	StoreRDRC       bool               `json:"store_rdrc,omitempty"`
 	StoreWARPConfig bool               `json:"store_warp_config,omitempty"`
 	RDRCTimeout     badoption.Duration `json:"rdrc_timeout,omitempty"`
+	StoreDNS        bool               `json:"store_dns,omitempty"`
 }
 
 type ClashAPIOptions struct {

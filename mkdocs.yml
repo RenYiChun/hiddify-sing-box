@@ -1,4 +1,5 @@
 site_name: sing-box
+site_url: https://sing-box.sagernet.org/
 site_author: nekohasekai
 repo_url: https://github.com/SagerNet/sing-box
 repo_name: SagerNet/sing-box
@@ -121,6 +122,14 @@ nav:
           - Listen Fields: configuration/shared/listen.md
           - Dial Fields: configuration/shared/dial.md
           - TLS: configuration/shared/tls.md
+          - HTTP Client: configuration/shared/http-client.md
+          - HTTP2 Fields: configuration/shared/http2.md
+          - QUIC Fields: configuration/shared/quic.md
+          - Certificate Provider:
+              - configuration/shared/certificate-provider/index.md
+              - ACME: configuration/shared/certificate-provider/acme.md
+              - Tailscale: configuration/shared/certificate-provider/tailscale.md
+              - Cloudflare Origin CA: configuration/shared/certificate-provider/cloudflare-origin-ca.md
           - DNS01 Challenge Fields: configuration/shared/dns01_challenge.md
           - Pre-match: configuration/shared/pre-match.md
           - Multiplex: configuration/shared/multiplex.md
@@ -128,6 +137,7 @@ nav:
           - UDP over TCP: configuration/shared/udp-over-tcp.md
           - TCP Brutal: configuration/shared/tcp-brutal.md
           - Wi-Fi State: configuration/shared/wifi-state.md
+          - Neighbor Resolution: configuration/shared/neighbor.md
       - Endpoint:
           - configuration/endpoint/index.md
           - WireGuard: configuration/endpoint/wireguard.md
@@ -151,6 +161,7 @@ nav:
           - Tun: configuration/inbound/tun.md
           - Redirect: configuration/inbound/redirect.md
           - TProxy: configuration/inbound/tproxy.md
+          - Cloudflared: configuration/inbound/cloudflared.md
       - Outbound:
           - configuration/outbound/index.md
           - Direct: configuration/outbound/direct.md
@@ -181,6 +192,10 @@ nav:
           - CCM: configuration/service/ccm.md
           - OCM: configuration/service/ocm.md
 markdown_extensions:
+  - toc:
+      slugify: !!python/object/apply:pymdownx.slugs.slugify
+        kwds:
+          case: lower
   - pymdownx.inlinehilite
   - pymdownx.snippets
   - pymdownx.superfences
@@ -267,6 +282,7 @@ plugins:
             Shared: 通用
             Listen Fields: 监听字段
             Dial Fields: 拨号字段
+            Certificate Provider Fields: 证书提供者字段
             DNS01 Challenge Fields: DNS01 验证字段
             Multiplex: 多路复用
             V2Ray Transport: V2Ray 传输层
@@ -275,6 +291,7 @@ plugins:
             Endpoint: 端点
             Inbound: 入站
             Outbound: 出站
+            Certificate Provider: 证书提供者
 
             Manual: 手册
       reconfigure_material: true

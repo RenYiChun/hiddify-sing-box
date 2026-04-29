@@ -2,13 +2,19 @@
 icon: material/new-box
 ---
 
+!!! quote "Changes in sing-box 1.14.0"
+
+    :material-plus: [control_http_client](#control_http_client)  
+    :material-delete-clock: [Dial Fields](#dial-fields)
+
 !!! quote "Changes in sing-box 1.13.0"
 
     :material-plus: [relay_server_port](#relay_server_port)  
     :material-plus: [relay_server_static_endpoints](#relay_server_static_endpoints)  
     :material-plus: [system_interface](#system_interface)  
     :material-plus: [system_interface_name](#system_interface_name)  
-    :material-plus: [system_interface_mtu](#system_interface_mtu)
+    :material-plus: [system_interface_mtu](#system_interface_mtu)  
+    :material-plus: [advertise_tags](#advertise_tags)
 
 !!! question "Since sing-box 1.12.0"
 
@@ -21,6 +27,7 @@ icon: material/new-box
   "state_directory": "",
   "auth_key": "",
   "control_url": "",
+  "control_http_client": {}, // or ""
   "ephemeral": false,
   "hostname": "",
   "accept_routes": false,
@@ -28,6 +35,7 @@ icon: material/new-box
   "exit_node_allow_lan_access": false,
   "advertise_routes": [],
   "advertise_exit_node": false,
+  "advertise_tags": [],
   "relay_server_port": 0,
   "relay_server_static_endpoints": [],
   "system_interface": false,
@@ -102,6 +110,14 @@ Example: `["192.168.1.1/24"]`
 
 Indicates whether the node should advertise itself as an exit node.
 
+#### advertise_tags
+
+!!! question "Since sing-box 1.13.0"
+
+Tags to advertise for this node, for ACL enforcement purposes.
+
+Example: `["tag:server"]`
+
 #### relay_server_port
 
 !!! question "Since sing-box 1.13.0"
@@ -138,10 +154,18 @@ UDP NAT expiration time.
 
 `5m` will be used by default.
 
+#### control_http_client
+
+!!! question "Since sing-box 1.14.0"
+
+HTTP Client for connecting to the Tailscale control plane.
+
+See [HTTP Client Fields](/configuration/shared/http-client/) for details.
+
 ### Dial Fields
 
-!!! note
+!!! failure "Deprecated in sing-box 1.14.0"
 
-    Dial Fields in Tailscale endpoints only control how it connects to the control plane and have nothing to do with actual connections.
+    Dial Fields in Tailscale endpoints are deprecated in sing-box 1.14.0 and will be removed in sing-box 1.16.0, use `control_http_client` instead.
 
 See [Dial Fields](/configuration/shared/dial/) for details.

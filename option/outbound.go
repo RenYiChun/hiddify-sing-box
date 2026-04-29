@@ -4,7 +4,6 @@ import (
 	"context"
 
 	C "github.com/sagernet/sing-box/constant"
-	"github.com/sagernet/sing-box/experimental/deprecated"
 	E "github.com/sagernet/sing/common/exceptions"
 	"github.com/sagernet/sing/common/json"
 	"github.com/sagernet/sing/common/json/badjson"
@@ -40,7 +39,7 @@ func (h *Outbound) UnmarshalJSONContext(ctx context.Context, content []byte) err
 	}
 	switch h.Type {
 	case C.TypeDNS:
-		deprecated.Report(ctx, deprecated.OptionSpecialOutbounds)
+		return E.New("dns outbound is deprecated in sing-box 1.11.0 and removed in sing-box 1.13.0, use rule actions instead")
 	}
 	options, loaded := registry.CreateOptions(h.Type)
 	if !loaded {
@@ -51,8 +50,9 @@ func (h *Outbound) UnmarshalJSONContext(ctx context.Context, content []byte) err
 		return err
 	}
 	if listenWrapper, isListen := options.(ListenOptionsWrapper); isListen {
+		//nolint:staticcheck
 		if listenWrapper.TakeListenOptions().InboundOptions != (InboundOptions{}) {
-			deprecated.Report(ctx, deprecated.OptionInboundOptions)
+			return E.New("legacy inbound fields are deprecated in sing-box 1.11.0 and removed in sing-box 1.13.0, use rule actions instead")
 		}
 	}
 	h.Options = options
@@ -96,11 +96,12 @@ type DialerOptions struct {
 }
 
 type _DomainResolveOptions struct {
-	Server       string                `json:"server"`
-	Strategy     DomainStrategy        `json:"strategy,omitempty"`
-	DisableCache bool                  `json:"disable_cache,omitempty"`
-	RewriteTTL   *uint32               `json:"rewrite_ttl,omitempty"`
-	ClientSubnet *badoption.Prefixable `json:"client_subnet,omitempty"`
+	Server                 string                `json:"server"`
+	Strategy               DomainStrategy        `json:"strategy,omitempty"`
+	DisableCache           bool                  `json:"disable_cache,omitempty"`
+	DisableOptimisticCache bool                  `json:"disable_optimistic_cache,omitempty"`
+	RewriteTTL             *uint32               `json:"rewrite_ttl,omitempty"`
+	ClientSubnet           *badoption.Prefixable `json:"client_subnet,omitempty"`
 }
 
 type DomainResolveOptions _DomainResolveOptions
@@ -110,6 +111,7 @@ func (o DomainResolveOptions) MarshalJSON() ([]byte, error) {
 		return []byte("{}"), nil
 	} else if o.Strategy == DomainStrategy(C.DomainStrategyAsIS) &&
 		!o.DisableCache &&
+		!o.DisableOptimisticCache &&
 		o.RewriteTTL == nil &&
 		o.ClientSubnet == nil {
 		return json.Marshal(o.Server)
@@ -158,7 +160,7 @@ func (o ServerOptions) Build() M.Socksaddr {
 }
 
 func (o ServerOptions) ServerIsDomain() bool {
-	return M.IsDomainName(o.Server)
+	return o.Build().IsDomain()
 }
 
 func (o *ServerOptions) TakeServerOptions() ServerOptions {

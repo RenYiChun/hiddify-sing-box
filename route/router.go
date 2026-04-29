@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"runtime"
+	"time"
 
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/common/process"
@@ -12,8 +13,11 @@ import (
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
 	R "github.com/sagernet/sing-box/route/rule"
+	"github.com/sagernet/sing/common"
 	E "github.com/sagernet/sing/common/exceptions"
 	"github.com/sagernet/sing/common/task"
+	"github.com/sagernet/sing/contrab/freelru"
+	"github.com/sagernet/sing/contrab/maphash"
 	"github.com/sagernet/sing/service"
 	"github.com/sagernet/sing/service/pause"
 )
@@ -29,11 +33,16 @@ type Router struct {
 	dnsTransport      adapter.DNSTransportManager
 	connection        adapter.ConnectionManager
 	network           adapter.NetworkManager
+	httpClientManager adapter.HTTPClientManager
 	rules             []adapter.Rule
 	needFindProcess   bool
+	needFindNeighbor  bool
+	leaseFiles        []string
 	ruleSets          []adapter.RuleSet
 	ruleSetMap        map[string]adapter.RuleSet
 	processSearcher   process.Searcher
+	processCache      freelru.Cache[processCacheKey, processCacheEntry]
+	neighborResolver  adapter.NeighborResolver
 	pauseManager      pause.Manager
 	trackers          []adapter.ConnectionTracker
 	platformInterface adapter.PlatformInterface
@@ -50,9 +59,12 @@ func NewRouter(ctx context.Context, logFactory log.Factory, options option.Route
 		dnsTransport:      service.FromContext[adapter.DNSTransportManager](ctx),
 		connection:        service.FromContext[adapter.ConnectionManager](ctx),
 		network:           service.FromContext[adapter.NetworkManager](ctx),
+		httpClientManager: service.FromContext[adapter.HTTPClientManager](ctx),
 		rules:             make([]adapter.Rule, 0, len(options.Rules)),
 		ruleSetMap:        make(map[string]adapter.RuleSet),
 		needFindProcess:   hasRule(options.Rules, isProcessRule) || hasDNSRule(dnsOptions.Rules, isProcessDNSRule) || options.FindProcess,
+		needFindNeighbor:  hasRule(options.Rules, isNeighborRule) || hasDNSRule(dnsOptions.Rules, isNeighborDNSRule) || options.FindNeighbor,
+		leaseFiles:        options.DHCPLeaseFiles,
 		pauseManager:      service.FromContext[pause.Manager](ctx),
 		platformInterface: service.FromContext[adapter.PlatformInterface](ctx),
 	}
@@ -60,6 +72,10 @@ func NewRouter(ctx context.Context, logFactory log.Factory, options option.Route
 
 func (r *Router) Initialize(rules []option.Rule, ruleSets []option.RuleSet) error {
 	for i, options := range rules {
+		err := R.ValidateNoNestedRuleActions(options)
+		if err != nil {
+			return E.Cause(err, "parse rule[", i, "]")
+		}
 		rule, err := R.NewRule(r.ctx, r.logger, options, false)
 		if err != nil {
 			return E.Cause(err, "parse rule[", i, "]")
@@ -84,15 +100,15 @@ func (r *Router) Start(stage adapter.StartStage) error {
 	monitor := taskmonitor.New(r.logger, C.StartTimeout)
 	switch stage {
 	case adapter.StartStateStart:
-		var cacheContext *adapter.HTTPStartContext
+		var startContext *adapter.HTTPStartContext
 		if len(r.ruleSets) > 0 {
 			monitor.Start("initialize rule-set")
-			cacheContext = adapter.NewHTTPStartContext(r.ctx)
+			startContext = adapter.NewHTTPStartContext()
 			var ruleSetStartGroup task.Group
 			for i, ruleSet := range r.ruleSets {
 				ruleSetInPlace := ruleSet
 				ruleSetStartGroup.Append0(func(ctx context.Context) error {
-					err := ruleSetInPlace.StartContext(ctx, cacheContext)
+					err := ruleSetInPlace.StartContext(ctx, startContext)
 					if err != nil {
 						return E.Cause(err, "initialize rule-set[", i, "]")
 					}
@@ -107,11 +123,12 @@ func (r *Router) Start(stage adapter.StartStage) error {
 				return err
 			}
 		}
-		if cacheContext != nil {
-			cacheContext.Close()
+		if startContext != nil {
+			startContext.Close()
 		}
 		r.network.Initialize(r.ruleSets)
 		needFindProcess := r.needFindProcess
+		needFindNeighbor := r.needFindNeighbor
 		for _, ruleSet := range r.ruleSets {
 			metadata := ruleSet.Metadata()
 			if metadata.ContainsProcessRule {
@@ -138,6 +155,41 @@ func (r *Router) Start(stage adapter.StartStage) error {
 					}
 				} else {
 					r.processSearcher = searcher
+				}
+			}
+		}
+		if r.processSearcher != nil {
+			processCache := common.Must1(freelru.NewSharded[processCacheKey, processCacheEntry](256, maphash.NewHasher[processCacheKey]().Hash32))
+			processCache.SetLifetime(200 * time.Millisecond)
+			r.processCache = processCache
+		}
+		r.needFindNeighbor = needFindNeighbor
+		if needFindNeighbor {
+			if r.platformInterface != nil && r.platformInterface.UsePlatformNeighborResolver() {
+				monitor.Start("initialize neighbor resolver")
+				resolver := newPlatformNeighborResolver(r.logger, r.platformInterface)
+				err := resolver.Start()
+				monitor.Finish()
+				if err != nil {
+					r.logger.Error(E.Cause(err, "start neighbor resolver"))
+				} else {
+					r.neighborResolver = resolver
+				}
+			} else {
+				monitor.Start("initialize neighbor resolver")
+				resolver, err := newNeighborResolver(r.logger, r.leaseFiles)
+				monitor.Finish()
+				if err != nil {
+					if err != os.ErrInvalid {
+						r.logger.Error(E.Cause(err, "create neighbor resolver"))
+					}
+				} else {
+					err = resolver.Start()
+					if err != nil {
+						r.logger.Error(E.Cause(err, "start neighbor resolver"))
+					} else {
+						r.neighborResolver = resolver
+					}
 				}
 			}
 		}
@@ -172,6 +224,13 @@ func (r *Router) Start(stage adapter.StartStage) error {
 func (r *Router) Close() error {
 	monitor := taskmonitor.New(r.logger, C.StopTimeout)
 	var err error
+	if r.neighborResolver != nil {
+		monitor.Start("close neighbor resolver")
+		err = E.Append(err, r.neighborResolver.Close(), func(closeErr error) error {
+			return E.Cause(closeErr, "close neighbor resolver")
+		})
+		monitor.Finish()
+	}
 	for i, rule := range r.rules {
 		monitor.Start("close rule[", i, "]")
 		err = E.Append(err, rule.Close(), func(err error) error {
@@ -183,6 +242,13 @@ func (r *Router) Close() error {
 		monitor.Start("close rule-set[", i, "]")
 		err = E.Append(err, ruleSet.Close(), func(err error) error {
 			return E.Cause(err, "close rule-set[", i, "]")
+		})
+		monitor.Finish()
+	}
+	if r.processSearcher != nil {
+		monitor.Start("close process searcher")
+		err = E.Append(err, r.processSearcher.Close(), func(err error) error {
+			return E.Cause(err, "close process searcher")
 		})
 		monitor.Finish()
 	}
@@ -206,7 +272,16 @@ func (r *Router) NeedFindProcess() bool {
 	return r.needFindProcess
 }
 
+func (r *Router) NeedFindNeighbor() bool {
+	return r.needFindNeighbor
+}
+
+func (r *Router) NeighborResolver() adapter.NeighborResolver {
+	return r.neighborResolver
+}
+
 func (r *Router) ResetNetwork() {
 	r.network.ResetNetwork()
+	r.httpClientManager.ResetNetwork()
 	r.dns.ResetNetwork()
 }

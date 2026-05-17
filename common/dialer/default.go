@@ -245,6 +245,15 @@ func (d *DefaultDialer) DialContext(ctx context.Context, network string, address
 	} else if address.IsDomain() {
 		return nil, E.New("domain not resolved")
 	}
+	release, err := acquireDefaultDialSlot(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	return d.dialContext(ctx, network, address)
+}
+
+func (d *DefaultDialer) dialContext(ctx context.Context, network string, address M.Socksaddr) (net.Conn, error) {
 	if d.networkStrategy == nil {
 		return d.trackConn(listener.ListenNetworkNamespace[net.Conn](d.netns, func() (net.Conn, error) {
 			switch N.NetworkName(network) {
@@ -262,16 +271,30 @@ func (d *DefaultDialer) DialContext(ctx context.Context, network string, address
 			}
 		}))
 	} else {
-		return d.DialParallelInterface(ctx, network, address, d.networkStrategy, d.networkType, d.fallbackNetworkType, d.networkFallbackDelay)
+		return d.dialParallelInterfaceWithStrategy(ctx, network, address, d.networkStrategy, d.networkType, d.fallbackNetworkType, d.networkFallbackDelay)
 	}
 }
 
 func (d *DefaultDialer) DialParallelInterface(ctx context.Context, network string, address M.Socksaddr, strategy *C.NetworkStrategy, interfaceType []C.InterfaceType, fallbackInterfaceType []C.InterfaceType, fallbackDelay time.Duration) (net.Conn, error) {
+	if !address.IsValid() {
+		return nil, E.New("invalid address")
+	} else if address.IsFqdn() {
+		return nil, E.New("domain not resolved")
+	}
+	release, err := acquireDefaultDialSlot(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	return d.dialParallelInterfaceWithStrategy(ctx, network, address, strategy, interfaceType, fallbackInterfaceType, fallbackDelay)
+}
+
+func (d *DefaultDialer) dialParallelInterfaceWithStrategy(ctx context.Context, network string, address M.Socksaddr, strategy *C.NetworkStrategy, interfaceType []C.InterfaceType, fallbackInterfaceType []C.InterfaceType, fallbackDelay time.Duration) (net.Conn, error) {
 	if strategy == nil {
 		strategy = d.networkStrategy
 	}
 	if strategy == nil {
-		return d.DialContext(ctx, network, address)
+		return d.dialContext(ctx, network, address)
 	}
 	if len(interfaceType) == 0 {
 		interfaceType = d.networkType
@@ -303,7 +326,7 @@ func (d *DefaultDialer) DialParallelInterface(ctx context.Context, network strin
 		// bind interface failed on legacy xiaomi systems
 		if d.defaultNetworkStrategy && errors.Is(err, syscall.EPERM) {
 			d.networkStrategy = nil
-			return d.DialContext(ctx, network, address)
+			return d.dialContext(ctx, network, address)
 		} else {
 			return nil, err
 		}
@@ -315,6 +338,15 @@ func (d *DefaultDialer) DialParallelInterface(ctx context.Context, network strin
 }
 
 func (d *DefaultDialer) ListenPacket(ctx context.Context, destination M.Socksaddr) (net.PacketConn, error) {
+	release, err := acquireDefaultDialSlot(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	return d.listenPacket(ctx, destination)
+}
+
+func (d *DefaultDialer) listenPacket(ctx context.Context, destination M.Socksaddr) (net.PacketConn, error) {
 	if d.networkStrategy == nil {
 		return d.trackPacketConn(listener.ListenNetworkNamespace[net.PacketConn](d.netns, func() (net.PacketConn, error) {
 			if destination.IsIPv6() {
@@ -326,7 +358,7 @@ func (d *DefaultDialer) ListenPacket(ctx context.Context, destination M.Socksadd
 			}
 		}))
 	} else {
-		return d.ListenSerialInterfacePacket(ctx, destination, d.networkStrategy, d.networkType, d.fallbackNetworkType, d.networkFallbackDelay)
+		return d.listenSerialInterfacePacketWithStrategy(ctx, destination, d.networkStrategy, d.networkType, d.fallbackNetworkType, d.networkFallbackDelay)
 	}
 }
 
@@ -339,11 +371,20 @@ func (d *DefaultDialer) DialerForICMPDestination(destination netip.Addr) net.Dia
 }
 
 func (d *DefaultDialer) ListenSerialInterfacePacket(ctx context.Context, destination M.Socksaddr, strategy *C.NetworkStrategy, interfaceType []C.InterfaceType, fallbackInterfaceType []C.InterfaceType, fallbackDelay time.Duration) (net.PacketConn, error) {
+	release, err := acquireDefaultDialSlot(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	return d.listenSerialInterfacePacketWithStrategy(ctx, destination, strategy, interfaceType, fallbackInterfaceType, fallbackDelay)
+}
+
+func (d *DefaultDialer) listenSerialInterfacePacketWithStrategy(ctx context.Context, destination M.Socksaddr, strategy *C.NetworkStrategy, interfaceType []C.InterfaceType, fallbackInterfaceType []C.InterfaceType, fallbackDelay time.Duration) (net.PacketConn, error) {
 	if strategy == nil {
 		strategy = d.networkStrategy
 	}
 	if strategy == nil {
-		return d.ListenPacket(ctx, destination)
+		return d.listenPacket(ctx, destination)
 	}
 	if len(interfaceType) == 0 {
 		interfaceType = d.networkType
@@ -363,7 +404,7 @@ func (d *DefaultDialer) ListenSerialInterfacePacket(ctx context.Context, destina
 		// bind interface failed on legacy xiaomi systems
 		if d.defaultNetworkStrategy && errors.Is(err, syscall.EPERM) {
 			d.networkStrategy = nil
-			return d.ListenPacket(ctx, destination)
+			return d.listenPacket(ctx, destination)
 		} else {
 			return nil, err
 		}

@@ -25,8 +25,8 @@ func NewRoundRobin(outbounds []adapter.Outbound, options option.BalancerOutbound
 	cOutbounds := convertOutbounds(outbounds)
 	acceptable := map[string]int{}
 	idx := map[string]int{}
-	for net, outs := range cOutbounds {
-		acceptable[net] = len(outs) - 1
+	for net := range cOutbounds {
+		acceptable[net] = -1
 		idx[net] = 0
 	}
 	return &RoundRobin{
@@ -40,8 +40,15 @@ func NewRoundRobin(outbounds []adapter.Outbound, options option.BalancerOutbound
 }
 
 func (s *RoundRobin) Now() string {
-	// s.idxMutex.Lock()
-	// defer s.idxMutex.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if outbound, _ := s.currentLocked(N.NetworkTCP); outbound != nil {
+		return outbound.Tag()
+	}
+	if outbound, _ := s.currentLocked(N.NetworkUDP); outbound != nil {
+		return outbound.Tag()
+	}
 	return ""
 }
 
@@ -64,19 +71,34 @@ func (s *RoundRobin) UpdateOutboundsInfo(history map[string]*adapter.URLTestHist
 func (s *RoundRobin) Select(metadata adapter.InboundContext, net string, touch bool) adapter.Outbound {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if net != N.NetworkTCP && net != N.NetworkUDP {
-		net = N.NetworkTCP
-	}
-	i := 1
-	length := s.maxAcceptableIndex[net] + 1
-	if length == 0 {
+	proxy, id := s.currentLocked(net)
+	if proxy == nil {
 		return nil
 	}
-	id := (s.idx[net] + i) % length
-	proxy := s.sortedOutbounds[net][id]
 	if touch {
+		if net != N.NetworkTCP && net != N.NetworkUDP {
+			net = N.NetworkTCP
+		}
 		s.idx[net] = id
 	}
 	return proxy
+}
 
+func (s *RoundRobin) currentLocked(net string) (adapter.Outbound, int) {
+	if net != N.NetworkTCP && net != N.NetworkUDP {
+		net = N.NetworkTCP
+	}
+	outbounds := s.sortedOutbounds[net]
+	if len(outbounds) == 0 {
+		return nil, 0
+	}
+	length := s.maxAcceptableIndex[net] + 1
+	if length <= 0 {
+		length = len(outbounds)
+	}
+	if length > len(outbounds) {
+		length = len(outbounds)
+	}
+	id := (s.idx[net] + 1) % length
+	return outbounds[id], id
 }

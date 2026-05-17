@@ -130,14 +130,25 @@ func sortOutboundsByDelay(outbounds map[string][]adapter.Outbound, history map[s
 func getAcceptableIndex(sortedOutbounds map[string][]adapter.Outbound, history map[string]*adapter.URLTestHistory, delayAcceptableRatio float64) map[string]int {
 	res := map[string]int{}
 	for net, outs := range sortedOutbounds {
+		if len(outs) == 0 {
+			res[net] = -1
+			continue
+		}
 		minDelay := getTagDelay(outs[0].Tag(), history)
+		if minDelay >= monitoring.TimeoutDelay {
+			res[net] = -1
+			continue
+		}
 
 		maxAcceptableDelay := float64(math.Max(100, float64(minDelay))) * delayAcceptableRatio
 
-		maxAvailableIndex := 0
+		maxAvailableIndex := -1
 		for i, outbound := range outs {
 			delay := getTagDelay(outbound.Tag(), history)
-			if delay <= uint16(maxAcceptableDelay) {
+			if delay >= monitoring.TimeoutDelay {
+				continue
+			}
+			if float64(delay) <= maxAcceptableDelay {
 				maxAvailableIndex = i
 			}
 		}
@@ -156,13 +167,18 @@ func getMinDelay(outbounds map[string][]adapter.Outbound, history map[string]*ad
 		for _, out := range outs {
 
 			d := getTagDelay(out.Tag(), history)
-			if d <= minDelay {
+			if d >= monitoring.TimeoutDelay {
+				continue
+			}
+			if d < minDelay {
 				minDelay = d
 				minOut = out
 			}
 		}
-		delays[net] = minDelay
-		bestOuts[net] = minOut
+		if minOut != nil {
+			delays[net] = minDelay
+			bestOuts[net] = minOut
+		}
 	}
 	return bestOuts, delays
 

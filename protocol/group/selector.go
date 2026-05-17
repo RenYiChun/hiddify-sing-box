@@ -86,7 +86,7 @@ func (s *Selector) Start() error {
 			selected := cacheFile.LoadSelected(s.Tag())
 			if selected != "" {
 				detour, loaded := s.outbounds[selected]
-				if loaded {
+				if loaded && !s.shouldPreferDefaultOverCachedSelection(selected) {
 					s.selected.Store(detour)
 					return nil
 				}
@@ -105,6 +105,20 @@ func (s *Selector) Start() error {
 
 	s.selected.Store(s.outbounds[s.tags[0]])
 	return nil
+}
+
+func (s *Selector) shouldPreferDefaultOverCachedSelection(selected string) bool {
+	if s.defaultTag == "" || selected == "" || selected == s.defaultTag {
+		return false
+	}
+	if len(s.tags) > 0 && selected == s.tags[0] {
+		return true
+	}
+	return isGeneratedBootstrapGroup(selected) && isGeneratedBootstrapGroup(s.defaultTag)
+}
+
+func isGeneratedBootstrapGroup(tag string) bool {
+	return tag == "lowest" || tag == "balance"
 }
 
 func (s *Selector) PostStart() error {
@@ -153,17 +167,31 @@ func (s *Selector) pingSelected() {
 		s.logger.Warn("no outbound selected")
 		return
 	}
-	realTag := RealTag(selected)
-	// s.logger.Debug("pinging selected outbound: ", selected.Tag(), " (real tag: ", realTag, ")")
-	if r, ok := s.outbound.Outbound(realTag); ok {
-		// s.logger.Debug("found real tag: ", selected.Tag(), " (real tag: ", r.Tag(), ")")
-		if _, ok := r.(adapter.OutboundGroup); !ok {
-			monitoring.Get(s.ctx).TestNow(realTag)
-		} else {
-			// s.logger.Debug(" real tag: is a group so skipping ping", selected.Tag(), " (real tag: ", r.Tag(), ")")
-			monitoring.Get(s.ctx).SignalChange(s.Tag())
-		}
+	targetTag, selectedIsGroup := monitoringTargetForSelected(selected)
+	if targetTag == "" {
+		s.logger.Warn("selected outbound has no monitoring target: ", selected.Tag())
+		return
 	}
+	monitor := monitoring.Get(s.ctx)
+	if monitor == nil {
+		return
+	}
+	monitor.TestNow(targetTag)
+	if selectedIsGroup {
+		monitor.SignalChange(s.Tag())
+	}
+}
+
+func monitoringTargetForSelected(selected adapter.Outbound) (string, bool) {
+	if selected == nil {
+		return "", false
+	}
+	if _, isGroup := selected.(adapter.OutboundGroup); isGroup {
+		// Test the whole selected group so balancers can quickly discover a
+		// working child instead of staying pinned to a stale or untested leaf.
+		return selected.Tag(), true
+	}
+	return RealTag(selected), false
 }
 func (s *Selector) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
 	conn, err := s.selected.Load().DialContext(ctx, network, destination)

@@ -350,20 +350,48 @@ func (r *NetworkManager) AutoDetectInterfaceFunc() control.Func {
 			return nil
 		}
 		return control.BindToInterfaceFunc(r.interfaceFinder, func(network string, address string) (interfaceName string, interfaceIndex int, err error) {
+			myInterface := r.interfaceMonitor.MyInterface()
 			remoteAddr := M.ParseSocksaddr(address).Addr
 			if remoteAddr.IsValid() {
 				iif, err := r.interfaceFinder.ByAddr(remoteAddr)
-				if err == nil {
+				if err == nil && iif.Name != myInterface {
 					return iif.Name, iif.Index, nil
 				}
 			}
-			defaultInterface := r.interfaceMonitor.DefaultInterface()
+			defaultInterface := selectOutboundDefaultInterface(
+				r.interfaceMonitor.DefaultInterface(),
+				r.networkInterfaces.Load(),
+				myInterface,
+			)
 			if defaultInterface == nil {
 				return "", -1, tun.ErrNoRoute
 			}
 			return defaultInterface.Name, defaultInterface.Index, nil
 		})
 	}
+}
+
+func selectOutboundDefaultInterface(defaultInterface *control.Interface, interfaces []adapter.NetworkInterface, myInterface string) *control.Interface {
+	if defaultInterface != nil && defaultInterface.Name != myInterface {
+		return defaultInterface
+	}
+	for _, interfaceType := range []C.InterfaceType{C.InterfaceTypeWIFI, C.InterfaceTypeEthernet, C.InterfaceTypeCellular} {
+		for index := range interfaces {
+			if interfaces[index].Name == "" || interfaces[index].Name == myInterface {
+				continue
+			}
+			if interfaces[index].Type == interfaceType {
+				return &interfaces[index].Interface
+			}
+		}
+	}
+	for index := range interfaces {
+		if interfaces[index].Name == "" || interfaces[index].Name == myInterface {
+			continue
+		}
+		return &interfaces[index].Interface
+	}
+	return nil
 }
 
 func (r *NetworkManager) ProtectFunc() control.Func {

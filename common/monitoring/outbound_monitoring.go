@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -96,7 +97,7 @@ type OutboundMonitoring struct {
 
 // InterfaceUpdated implements [adapter.InterfaceUpdateListener].
 func (m *OutboundMonitoring) InterfaceUpdated() {
-	m.startCycleOnce()
+	m.Touch()
 }
 
 // Name implements [adapter.LifecycleService].
@@ -371,7 +372,7 @@ func (m *OutboundMonitoring) testNow(outboundTag string, priority bool) error {
 	m.logger.Info("testing outbound ", outboundTag, " with priority: ", priority)
 	if grp, ok := m.groups[outboundTag]; ok {
 		for tag := range grp.outbounds {
-			m.testNow(tag, false)
+			m.testNow(tag, priority)
 		}
 	} else {
 		state := m.getState(outboundTag)
@@ -462,7 +463,6 @@ func (m *OutboundMonitoring) Close() error {
 
 func (m *OutboundMonitoring) scheduleLoop() {
 	m.logger.Info("outbound monitoring schedule loop started")
-	m.startCycleOnce()
 	ticker := m.mainTicker
 	for {
 		select {
@@ -516,19 +516,26 @@ func (m *OutboundMonitoring) executeTask(task *testTask) {
 	}
 
 	state.mu.Lock()
-	state.testing = true
-	state.mu.Unlock()
-	defer func() {
-		state.mu.Lock()
-		state.testing = false
+	if task.priority {
+		state.priorityQueued = false
+	} else if state.enqueuedCycle == task.cycleID {
+		state.enqueuedCycle = 0
+		state.queued = false
+	}
+	if state.testing {
 		state.mu.Unlock()
-	}()
-	state.mu.Lock()
+		m.logger.Warn("outbound ", task.outboundTag, " URL test already running, skipping duplicate task")
+		return
+	}
+	state.testing = true
 	cycle := task.cycleID
 	state.mu.Unlock()
 
 	if cycle < 10 && !state.outbound.IsReady() {
 		m.logger.Info("outbound ", task.outboundTag, " is not ready, skipping test")
+		state.mu.Lock()
+		state.testing = false
+		state.mu.Unlock()
 		go func() {
 			select {
 			case <-m.ctx.Done():
@@ -542,33 +549,52 @@ func (m *OutboundMonitoring) executeTask(task *testTask) {
 		}()
 		return
 	}
-	done := make(chan struct{})
+	taskCtx, cancel := context.WithTimeout(m.ctx, m.urlTestTimeout)
+	defer cancel()
+	resultCh := make(chan testOutcome, 1)
 	go func() {
-		defer close(done)
-		delay, err := m.tester(m.ctx, task.outboundTag)
-
-		outcome := testOutcome{
+		defer func() {
+			state.mu.Lock()
+			state.testing = false
+			state.mu.Unlock()
+		}()
+		delay, err := m.tester(taskCtx, task.outboundTag)
+		resultCh <- testOutcome{
 			outboundTag: task.outboundTag,
 			history:     delay,
 			err:         err,
 			cycleID:     task.cycleID,
 			priority:    task.priority,
 		}
-
-		m.applyResult(outcome)
-		if task.resultCh != nil {
-			select {
-			case task.resultCh <- outcome:
-			case <-m.ctx.Done():
-			default:
-			}
-
-		}
 	}()
+
+	var outcome testOutcome
 	select {
 	case <-m.ctx.Done():
 		return
-	case <-done:
+	case outcome = <-resultCh:
+	case <-time.After(m.urlTestTimeout + 100*time.Millisecond):
+		cancel()
+		m.logger.Warn("outbound ", task.outboundTag, " URL test exceeded timeout, marking failed")
+		outcome = testOutcome{
+			outboundTag: task.outboundTag,
+			history: adapter.URLTestHistory{
+				Time:  time.Now(),
+				Delay: TimeoutDelay,
+			},
+			err:      context.DeadlineExceeded,
+			cycleID:  task.cycleID,
+			priority: task.priority,
+		}
+	}
+
+	m.applyResult(outcome)
+	if task.resultCh != nil {
+		select {
+		case task.resultCh <- outcome:
+		case <-m.ctx.Done():
+		default:
+		}
 	}
 
 }
@@ -713,11 +739,17 @@ func (m *OutboundMonitoring) enqueueTask(task *testTask) bool {
 	defer state.mu.Unlock()
 
 	if task.priority {
+		if state.testing {
+			return false
+		}
 		if state.priorityQueued {
 			return false
 		}
 		state.priorityQueued = true
 	} else {
+		if state.testing {
+			return false
+		}
 		if state.enqueuedCycle == task.cycleID {
 			return false
 		}
@@ -803,6 +835,9 @@ func (m *OutboundMonitoring) collectCycleTargets() []string {
 		if _, ok := m.groups[tag]; ok {
 			continue
 		}
+		if !shouldMonitorOutboundTag(tag) {
+			continue
+		}
 		state.mu.Lock()
 		if state.testing || state.queued || state.priorityQueued {
 			state.mu.Unlock()
@@ -819,6 +854,10 @@ func (m *OutboundMonitoring) collectCycleTargets() []string {
 		return delays[tags[i]] < delays[tags[j]]
 	})
 	return tags
+}
+
+func shouldMonitorOutboundTag(tag string) bool {
+	return !strings.Contains(tag, "§hide§")
 }
 
 func (m *OutboundMonitoring) makeGroup(tag string) *groupState {

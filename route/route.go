@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/common/conntrack"
 	"github.com/sagernet/sing-box/common/sniff"
 	C "github.com/sagernet/sing-box/constant"
 	R "github.com/sagernet/sing-box/route/rule"
@@ -57,7 +58,7 @@ func (r *Router) RouteConnectionEx(ctx context.Context, conn net.Conn, metadata 
 	}
 }
 
-func (r *Router) routeConnection(ctx context.Context, conn net.Conn, metadata adapter.InboundContext, onClose N.CloseHandlerFunc) error {
+func (r *Router) routeConnection(ctx context.Context, conn net.Conn, metadata adapter.InboundContext, onClose N.CloseHandlerFunc) (err error) {
 	//nolint:staticcheck
 	if metadata.InboundDetour != "" {
 		if metadata.LastInbound == metadata.InboundDetour {
@@ -76,6 +77,9 @@ func (r *Router) routeConnection(ctx context.Context, conn net.Conn, metadata ad
 		metadata.InboundDetour = ""
 		injectable.NewConnectionEx(ctx, conn, metadata, onClose)
 		return nil
+	}
+	if err := conntrack.KillerCheck(); err != nil {
+		return err
 	}
 	metadata.Network = N.NetworkTCP
 	switch metadata.Destination.Fqdn {
@@ -146,6 +150,17 @@ func (r *Router) routeConnection(ctx context.Context, conn net.Conn, metadata ad
 		selectedOutbound = defaultOutbound
 	}
 
+	releaseAdmission, err := acquireRouteConnectionAdmissionForOutboundType(selectedOutbound.Type())
+	if err != nil {
+		buf.ReleaseMulti(buffers)
+		return err
+	}
+	onClose = N.AppendClose(onClose, releaseAdmission)
+	defer func() {
+		if err != nil {
+			releaseAdmission(err)
+		}
+	}()
 	for _, buffer := range buffers {
 		conn = bufio.NewCachedConn(conn, buffer)
 	}
@@ -192,7 +207,7 @@ func (r *Router) RoutePacketConnectionEx(ctx context.Context, conn N.PacketConn,
 	}
 }
 
-func (r *Router) routePacketConnection(ctx context.Context, conn N.PacketConn, metadata adapter.InboundContext, onClose N.CloseHandlerFunc) error {
+func (r *Router) routePacketConnection(ctx context.Context, conn N.PacketConn, metadata adapter.InboundContext, onClose N.CloseHandlerFunc) (err error) {
 	//nolint:staticcheck
 	if metadata.InboundDetour != "" {
 		if metadata.LastInbound == metadata.InboundDetour {
@@ -212,9 +227,12 @@ func (r *Router) routePacketConnection(ctx context.Context, conn N.PacketConn, m
 		injectable.NewPacketConnectionEx(ctx, conn, metadata, onClose)
 		return nil
 	}
+	if err := conntrack.KillerCheck(); err != nil {
+		return err
+	}
+
 	// TODO: move to UoT
 	metadata.Network = N.NetworkUDP
-
 	// Currently we don't have deadline usages for UDP connections
 	/*if deadline.NeedAdditionalReadDeadline(conn) {
 		conn = deadline.NewPacketConn(bufio.NewNetPacketConn(conn))
@@ -271,6 +289,17 @@ func (r *Router) routePacketConnection(ctx context.Context, conn N.PacketConn, m
 		}
 		selectedOutbound = defaultOutbound
 	}
+	releaseAdmission, err := acquireRouteConnectionAdmissionForOutboundType(selectedOutbound.Type())
+	if err != nil {
+		N.ReleaseMultiPacketBuffer(packetBuffers)
+		return err
+	}
+	onClose = N.AppendClose(onClose, releaseAdmission)
+	defer func() {
+		if err != nil {
+			releaseAdmission(err)
+		}
+	}()
 	for _, buffer := range packetBuffers {
 		conn = bufio.NewCachedPacketConn(conn, buffer.Buffer, buffer.Destination)
 		N.PutPacketBuffer(buffer)

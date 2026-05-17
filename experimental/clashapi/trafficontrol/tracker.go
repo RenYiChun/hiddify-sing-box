@@ -101,6 +101,7 @@ type TCPConn struct {
 	N.ExtendedConn
 	metadata TrackerMetadata
 	manager  *Manager
+	closed   atomic.Bool
 }
 
 func (tt *TCPConn) Metadata() *TrackerMetadata {
@@ -108,6 +109,9 @@ func (tt *TCPConn) Metadata() *TrackerMetadata {
 }
 
 func (tt *TCPConn) Close() error {
+	if !tt.closed.CompareAndSwap(false, true) {
+		return nil
+	}
 	tt.manager.Leave(tt)
 	return tt.ExtendedConn.Close()
 }
@@ -184,6 +188,7 @@ type UDPConn struct {
 	N.PacketConn `json:"-"`
 	metadata     TrackerMetadata
 	manager      *Manager
+	closed       atomic.Bool
 }
 
 func (ut *UDPConn) Metadata() *TrackerMetadata {
@@ -191,6 +196,9 @@ func (ut *UDPConn) Metadata() *TrackerMetadata {
 }
 
 func (ut *UDPConn) Close() error {
+	if !ut.closed.CompareAndSwap(false, true) {
+		return nil
+	}
 	ut.manager.Leave(ut)
 	return ut.PacketConn.Close()
 }

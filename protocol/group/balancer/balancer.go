@@ -108,9 +108,19 @@ func (s *Balancer) Start() error {
 }
 
 func (s *Balancer) PostStart() error {
+	s.initializeStrategyFromHistory()
 	go s.worker()
 
 	return nil
+}
+
+func (s *Balancer) initializeStrategyFromHistory() {
+	if s.monitor == nil || s.strategyFn == nil {
+		return
+	}
+	if s.strategyFn.UpdateOutboundsInfo(s.monitor.OutboundsHistory(s.Tag())) {
+		s.logger.Info("initialized load balance selection from history: ", s.strategyFn.Now())
+	}
 }
 
 func (s *Balancer) worker() {
@@ -206,6 +216,16 @@ func (s *Balancer) ListenPacket(ctx context.Context, destination M.Socksaddr) (n
 func (s *Balancer) NewConnectionEx(ctx context.Context, conn net.Conn, metadata adapter.InboundContext, onClose N.CloseHandlerFunc) {
 	ctx = interrupt.ContextWithIsExternalConnection(ctx)
 	selected := s.strategyFn.Select(metadata, metadata.Network, true)
+	if selected == nil {
+		err := E.New("missing supported outbound")
+		s.logger.ErrorContext(ctx, err)
+		conn.Close()
+		if onClose != nil {
+			onClose(err)
+		}
+		return
+	}
+	metadata.SetRealOutbound(selected.Tag())
 	conn = s.interruptGroup.NewConn(conn, interrupt.IsExternalConnectionFromContext(ctx))
 	if outboundHandler, isHandler := selected.(adapter.ConnectionHandlerEx); isHandler {
 		outboundHandler.NewConnectionEx(ctx, conn, metadata, onClose)
@@ -218,6 +238,12 @@ func (s *Balancer) NewPacketConnectionEx(ctx context.Context, conn N.PacketConn,
 	ctx = interrupt.ContextWithIsExternalConnection(ctx)
 	selected := s.strategyFn.Select(metadata, metadata.Network, true)
 	if selected == nil {
+		err := E.New("missing supported outbound")
+		s.logger.ErrorContext(ctx, err)
+		conn.Close()
+		if onClose != nil {
+			onClose(err)
+		}
 		return
 	}
 	metadata.SetRealOutbound(selected.Tag())

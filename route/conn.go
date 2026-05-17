@@ -40,6 +40,46 @@ func NewConnectionManager(logger logger.ContextLogger) *ConnectionManager {
 	}
 }
 
+func newSafePacketReader(reader N.PacketReader) N.PacketReader {
+	if _, isSafe := reader.(safePacketReader); isSafe {
+		return reader
+	}
+	return safePacketReader{PacketReader: reader}
+}
+
+type contextHandshakeConn interface {
+	HandshakeContext(context.Context) error
+}
+
+func reportConnHandshakeSuccess(ctx context.Context, reporter any, conn net.Conn, timeout time.Duration) error {
+	if handshakeConn, isHandshakeConn := common.Cast[contextHandshakeConn](reporter); isHandshakeConn && timeout > 0 {
+		handshakeCtx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+		return handshakeConn.HandshakeContext(handshakeCtx)
+	}
+	return N.ReportConnHandshakeSuccess(reporter, conn)
+}
+
+type safePacketReader struct {
+	N.PacketReader
+}
+
+func (r safePacketReader) ReadCachedPacket() *N.PacketBuffer {
+	cachedReader, isCached := r.PacketReader.(N.CachedPacketReader)
+	if !isCached {
+		return nil
+	}
+	packet := cachedReader.ReadCachedPacket()
+	if packet == nil {
+		return nil
+	}
+	if packet.Buffer == nil {
+		N.PutPacketBuffer(packet)
+		return nil
+	}
+	return packet
+}
+
 func (m *ConnectionManager) Start(stage adapter.StartStage) error {
 	return nil
 }
@@ -120,7 +160,7 @@ func (m *ConnectionManager) NewConnection(ctx context.Context, this N.Dialer, co
 		m.logger.ErrorContext(ctx, err)
 		return
 	}
-	err = N.ReportConnHandshakeSuccess(conn, remoteConn)
+	err = reportConnHandshakeSuccess(ctx, conn, remoteConn, C.TCPConnectTimeout)
 	if err != nil {
 		err = E.Cause(err, "report handshake success")
 		remoteConn.Close()
@@ -215,9 +255,10 @@ func (m *ConnectionManager) NewPacketConnection(ctx context.Context, this N.Dial
 	}
 	err = N.ReportPacketConnHandshakeSuccess(conn, remotePacketConn)
 	if err != nil {
-		conn.Close()
+		err = E.Cause(err, "report handshake success")
 		remotePacketConn.Close()
-		m.logger.ErrorContext(ctx, "report handshake success: ", err)
+		N.CloseOnHandshakeFailure(conn, onClose, err)
+		m.logger.ErrorContext(ctx, err)
 		return
 	}
 	if destinationAddress.IsValid() {
@@ -355,7 +396,7 @@ func (m *ConnectionManager) kickWriteHandshake(ctx context.Context, source net.C
 }
 
 func (m *ConnectionManager) packetConnectionCopy(ctx context.Context, source N.PacketReader, destination N.PacketWriter, direction bool, done *atomic.Bool, onClose N.CloseHandlerFunc) {
-	_, err := bufio.CopyPacket(destination, source)
+	_, err := bufio.CopyPacket(destination, newSafePacketReader(source))
 	if !direction {
 		if err == nil {
 			m.logger.DebugContext(ctx, "packet upload finished")

@@ -99,6 +99,18 @@ func (s *HistoryStorage) Close() error {
 }
 
 func URLTest(ctx context.Context, link string, detour N.Dialer) (t uint16, err error) {
+	t, err = urlTestWithMethod(ctx, link, detour, http.MethodHead)
+	if err == nil || ctx.Err() != nil {
+		return
+	}
+	fallbackDelay, fallbackErr := urlTestWithMethod(ctx, link, detour, http.MethodGet)
+	if fallbackErr == nil {
+		return fallbackDelay, nil
+	}
+	return 0, fmt.Errorf("HEAD URL test failed: %w; GET fallback failed: %v", err, fallbackErr)
+}
+
+func urlTestWithMethod(ctx context.Context, link string, detour N.Dialer, method string) (t uint16, err error) {
 	if detour == nil {
 		err = fmt.Errorf("urltest dialer is nil")
 		return
@@ -130,9 +142,12 @@ func URLTest(ctx context.Context, link string, detour N.Dialer) (t uint16, err e
 	if N.NeedHandshakeForWrite(instance) {
 		start = time.Now()
 	}
-	req, err := http.NewRequest(http.MethodHead, link, nil)
+	req, err := http.NewRequestWithContext(ctx, method, link, nil)
 	if err != nil {
 		return
+	}
+	if method == http.MethodGet {
+		req.Header.Set("Range", "bytes=0-0")
 	}
 	select {
 	case <-ctx.Done():
@@ -160,7 +175,7 @@ func URLTest(ctx context.Context, link string, detour N.Dialer) (t uint16, err e
 		return
 	default:
 	}
-	resp, err := client.Do(req.WithContext(ctx))
+	resp, err := client.Do(req)
 	if err != nil {
 		return
 	}
@@ -175,7 +190,15 @@ func URLTest(ctx context.Context, link string, detour N.Dialer) (t uint16, err e
 		default:
 		}
 		second := time.Now()
-		resp, err = client.Do(req)
+		secondReq, reqErr := http.NewRequestWithContext(ctx, method, link, nil)
+		if reqErr != nil {
+			err = reqErr
+			return
+		}
+		if method == http.MethodGet {
+			secondReq.Header.Set("Range", "bytes=0-0")
+		}
+		resp, err = client.Do(secondReq)
 		if err != nil {
 			return
 		}

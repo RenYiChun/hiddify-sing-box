@@ -18,12 +18,15 @@ type LowestDelay struct {
 
 func NewLowestDelay(outbounds []adapter.Outbound, options option.BalancerOutboundOptions) *LowestDelay {
 	couts := convertOutbounds(outbounds)
+	selected := map[string]adapter.Outbound{}
+	for net, outs := range couts {
+		if len(outs) > 0 {
+			selected[net] = outs[0]
+		}
+	}
 	return &LowestDelay{
-		outbounds: couts,
-		selectedOutbound: map[string]adapter.Outbound{
-			N.NetworkUDP: couts[N.NetworkUDP][0],
-			N.NetworkTCP: couts[N.NetworkTCP][0],
-		},
+		outbounds:        couts,
+		selectedOutbound: selected,
 	}
 }
 
@@ -33,18 +36,28 @@ func (s *LowestDelay) Now() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	return s.selectedOutbound[N.NetworkTCP].Tag()
+	outbound := s.selectedOutbound[N.NetworkTCP]
+	if outbound == nil {
+		return ""
+	}
+	return outbound.Tag()
 }
 func (s *LowestDelay) UpdateOutboundsInfo(history map[string]*adapter.URLTestHistory) bool {
 	min, _ := getMinDelay(s.outbounds, history)
 
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	changed := false
 	for net, out := range min {
-		changed = changed || out.Tag() != s.selectedOutbound[net].Tag()
+		if out == nil {
+			continue
+		}
+		current := s.selectedOutbound[net]
+		if current == nil || out.Tag() != current.Tag() {
+			changed = true
+			s.selectedOutbound[net] = out
+		}
 	}
-	s.selectedOutbound = min
-	s.mu.Unlock()
 	return changed
 }
 func (s *LowestDelay) Select(metadata adapter.InboundContext, net string, touch bool) adapter.Outbound {

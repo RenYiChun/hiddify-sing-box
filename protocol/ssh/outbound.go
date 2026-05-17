@@ -35,6 +35,11 @@ func RegisterOutbound(registry *outbound.Registry) {
 
 var _ adapter.InterfaceUpdateListener = (*Outbound)(nil)
 
+const (
+	sshPreconnectTimeout = 5 * time.Second
+	sshHandshakeTimeout  = 15 * time.Second
+)
+
 type Outbound struct {
 	outbound.Adapter
 	ctx               context.Context
@@ -133,7 +138,7 @@ func randomVersion() string {
 	return version
 }
 
-func (s *Outbound) connect() (*ssh.Client, error) {
+func (s *Outbound) connect(ctx context.Context) (*ssh.Client, error) {
 	if s.client != nil {
 		return s.client, nil
 	}
@@ -145,7 +150,7 @@ func (s *Outbound) connect() (*ssh.Client, error) {
 		return s.client, nil
 	}
 
-	conn, err := s.dialer.DialContext(s.ctx, N.NetworkTCP, s.serverAddr)
+	conn, err := s.dialer.DialContext(ctx, N.NetworkTCP, s.serverAddr)
 	if err != nil {
 		return nil, err
 	}
@@ -168,7 +173,9 @@ func (s *Outbound) connect() (*ssh.Client, error) {
 			return E.New("host key mismatch, server send ", key.Type(), " ", base64.StdEncoding.EncodeToString(serverKey))
 		},
 	}
+	clearDeadline := setHandshakeDeadline(ctx, conn)
 	clientConn, chans, reqs, err := ssh.NewClientConn(conn, s.serverAddr.Addr.String(), config)
+	clearDeadline()
 	if err != nil {
 		conn.Close()
 		return nil, E.Cause(err, "connect to ssh server")
@@ -191,11 +198,30 @@ func (s *Outbound) connect() (*ssh.Client, error) {
 	return client, nil
 }
 
-func (s *Outbound) PostStart() error {
-	s.connect()
-	if s.IsReady() {
-		monitoring.Get(s.ctx).TestNow(s.Tag())
+func setHandshakeDeadline(ctx context.Context, conn net.Conn) func() {
+	deadline := time.Now().Add(sshHandshakeTimeout)
+	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
+		deadline = ctxDeadline
 	}
+	if err := conn.SetDeadline(deadline); err != nil {
+		return func() {}
+	}
+	return func() {
+		conn.SetDeadline(time.Time{})
+	}
+}
+
+func (s *Outbound) PostStart() error {
+	go func() {
+		ctx, cancel := context.WithTimeout(s.ctx, sshPreconnectTimeout)
+		defer cancel()
+		if _, err := s.connect(ctx); err != nil {
+			return
+		}
+		if monitor := monitoring.Get(s.ctx); monitor != nil {
+			monitor.TestNow(s.Tag())
+		}
+	}()
 	return nil
 }
 
@@ -211,7 +237,7 @@ func (s *Outbound) DialContext(ctx context.Context, network string, destination 
 	ctx, metadata := adapter.ExtendContext(ctx)
 	metadata.Outbound = s.Tag()
 	metadata.Destination = destination
-	client, err := s.connect()
+	client, err := s.connect(ctx)
 	if err != nil {
 		s.connectionErr = err.Error()
 		return nil, err

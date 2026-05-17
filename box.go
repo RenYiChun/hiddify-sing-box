@@ -520,72 +520,168 @@ func (s *Box) Start() error {
 
 func (s *Box) preStart() error {
 	monitor := taskmonitor.New(s.logger, C.StartTimeout)
-	monitor.Start("start logger")
-	err := s.logFactory.Start()
-	monitor.Finish()
-	if err != nil {
+	if err := s.runStartStep("preStart logger", func() error {
+		monitor.Start("start logger")
+		err := s.logFactory.Start()
+		monitor.Finish()
+		return err
+	}); err != nil {
 		return E.Cause(err, "start logger")
 	}
-	err = adapter.StartNamed(s.logger, adapter.StartStateInitialize, s.internalService) // cache-file clash-api v2ray-api
-	if err != nil {
+	if err := s.runStartStep("initialize internal services", func() error {
+		return adapter.StartNamed(s.logger, adapter.StartStateInitialize, s.internalService)
+	}); err != nil {
 		return err
 	}
-	err = adapter.Start(s.logger, adapter.StartStateInitialize, s.network, s.dnsTransport, s.dnsRouter, s.connection, s.router, s.outbound, s.inbound, s.endpoint, s.service, s.certificateProvider)
-	if err != nil {
-		return err
+	for _, step := range []struct {
+		name    string
+		service adapter.Lifecycle
+	}{
+		{"initialize network", s.network},
+		{"initialize dns transport", s.dnsTransport},
+		{"initialize dns router", s.dnsRouter},
+		{"initialize connection", s.connection},
+		{"initialize router", s.router},
+		{"initialize outbound", s.outbound},
+		{"initialize inbound", s.inbound},
+		{"initialize endpoint", s.endpoint},
+		{"initialize service", s.service},
+		{"initialize certificate-provider", s.certificateProvider},
+	} {
+		if err := s.runStartStep(step.name, func() error {
+			return adapter.Start(s.logger, adapter.StartStateInitialize, step.service)
+		}); err != nil {
+			return err
+		}
 	}
-	err = adapter.Start(s.logger, adapter.StartStateStart, s.outbound, s.dnsTransport, s.network, s.connection)
-	if err != nil {
-		return err
+	for _, step := range []struct {
+		name    string
+		service adapter.Lifecycle
+	}{
+		{"start outbound", s.outbound},
+		{"start dns transport", s.dnsTransport},
+		{"start dns router", s.dnsRouter},
+		{"start network", s.network},
+		{"start connection", s.connection},
+		{"start router", s.router},
+	} {
+		if err := s.runStartStep(step.name, func() error {
+			return adapter.Start(s.logger, adapter.StartStateStart, step.service)
+		}); err != nil {
+			return err
+		}
 	}
-	err = adapter.StartNamed(s.logger, adapter.StartStateStart, []adapter.LifecycleService{s.httpClientService})
-	if err != nil {
-		return err
+	if s.httpClientService != nil {
+		if err := s.runStartStep("start http client", func() error {
+			return adapter.StartNamed(s.logger, adapter.StartStateStart, []adapter.LifecycleService{s.httpClientService})
+		}); err != nil {
+			return err
+		}
 	}
-	err = adapter.Start(s.logger, adapter.StartStateStart, s.router, s.dnsRouter)
-	if err != nil {
-		return err
+	for _, step := range []struct {
+		name    string
+		service adapter.Lifecycle
+	}{
+		{"start router", s.router},
+		{"start dns router", s.dnsRouter},
+	} {
+		if err := s.runStartStep(step.name, func() error {
+			return adapter.Start(s.logger, adapter.StartStateStart, step.service)
+		}); err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
 func (s *Box) start() error {
-	err := s.preStart()
-	if err != nil {
+	if err := s.runStartStep("preStart", s.preStart); err != nil {
 		return err
 	}
-	err = adapter.StartNamed(s.logger, adapter.StartStateStart, s.internalService)
-	if err != nil {
+	if err := s.runStartStep("start internal services", func() error {
+		return adapter.StartNamed(s.logger, adapter.StartStateStart, s.internalService)
+	}); err != nil {
 		return err
 	}
-	err = adapter.Start(s.logger, adapter.StartStateStart, s.endpoint)
-	if err != nil {
+	for _, step := range []struct {
+		name    string
+		service adapter.Lifecycle
+	}{
+		{"start endpoint", s.endpoint},
+		{"start certificate-provider", s.certificateProvider},
+		{"start inbound", s.inbound},
+		{"start service", s.service},
+	} {
+		if err := s.runStartStep(step.name, func() error {
+			return adapter.Start(s.logger, adapter.StartStateStart, step.service)
+		}); err != nil {
+			return err
+		}
+	}
+	for _, step := range []struct {
+		name    string
+		service adapter.Lifecycle
+	}{
+		{"post-start outbound", s.outbound},
+		{"post-start network", s.network},
+		{"post-start dns transport", s.dnsTransport},
+		{"post-start dns router", s.dnsRouter},
+		{"post-start connection", s.connection},
+		{"post-start router", s.router},
+		{"post-start endpoint", s.endpoint},
+		{"post-start certificate-provider", s.certificateProvider},
+		{"post-start inbound", s.inbound},
+		{"post-start service", s.service},
+	} {
+		if err := s.runStartStep(step.name, func() error {
+			return adapter.Start(s.logger, adapter.StartStatePostStart, step.service)
+		}); err != nil {
+			return err
+		}
+	}
+	if err := s.runStartStep("post-start internal services", func() error {
+		return adapter.StartNamed(s.logger, adapter.StartStatePostStart, s.internalService)
+	}); err != nil {
 		return err
 	}
-	err = adapter.Start(s.logger, adapter.StartStateStart, s.certificateProvider)
-	if err != nil {
+	for _, step := range []struct {
+		name    string
+		service adapter.Lifecycle
+	}{
+		{"finish-start network", s.network},
+		{"finish-start dns transport", s.dnsTransport},
+		{"finish-start dns router", s.dnsRouter},
+		{"finish-start connection", s.connection},
+		{"finish-start router", s.router},
+		{"finish-start outbound", s.outbound},
+		{"finish-start endpoint", s.endpoint},
+		{"finish-start certificate-provider", s.certificateProvider},
+		{"finish-start inbound", s.inbound},
+		{"finish-start service", s.service},
+	} {
+		if err := s.runStartStep(step.name, func() error {
+			return adapter.Start(s.logger, adapter.StartStateStarted, step.service)
+		}); err != nil {
+			return err
+		}
+	}
+	if err := s.runStartStep("finish-start internal services", func() error {
+		return adapter.StartNamed(s.logger, adapter.StartStateStarted, s.internalService)
+	}); err != nil {
 		return err
 	}
-	err = adapter.Start(s.logger, adapter.StartStateStart, s.inbound, s.service)
+	return nil
+}
+
+func (s *Box) runStartStep(name string, fn func() error) error {
+	startedAt := time.Now()
+	println("H CORE TIMING Box", name, "begin")
+	err := fn()
 	if err != nil {
+		println("H CORE TIMING Box", name, "failed after", time.Since(startedAt).String(), err.Error())
 		return err
 	}
-	err = adapter.Start(s.logger, adapter.StartStatePostStart, s.outbound, s.network, s.dnsTransport, s.dnsRouter, s.connection, s.router, s.endpoint, s.certificateProvider, s.inbound, s.service)
-	if err != nil {
-		return err
-	}
-	err = adapter.StartNamed(s.logger, adapter.StartStatePostStart, s.internalService)
-	if err != nil {
-		return err
-	}
-	err = adapter.Start(s.logger, adapter.StartStateStarted, s.network, s.dnsTransport, s.dnsRouter, s.connection, s.router, s.outbound, s.endpoint, s.certificateProvider, s.inbound, s.service)
-	if err != nil {
-		return err
-	}
-	err = adapter.StartNamed(s.logger, adapter.StartStateStarted, s.internalService)
-	if err != nil {
-		return err
-	}
+	println("H CORE TIMING Box", name, "took", time.Since(startedAt).String())
 	return nil
 }
 
@@ -598,6 +694,17 @@ func (s *Box) Close() error {
 	}
 	closeTimeout := time.Second * 10
 	var err error
+	closedInternalServices := make(map[int]bool)
+	for i, lifecycleService := range s.internalService {
+		if lifecycleService.Name() != "outbound-monitoring" {
+			continue
+		}
+		cerr := s.closeWithTimeout(lifecycleService.Name(), closeTimeout, lifecycleService.Close)
+		err = E.Append(err, cerr, func(err error) error {
+			return E.Cause(err, "close ", lifecycleService.Name())
+		})
+		closedInternalServices[i] = true
+	}
 	for _, closeItem := range []struct {
 		name    string
 		service adapter.Lifecycle
@@ -619,14 +726,15 @@ func (s *Box) Close() error {
 		})
 	}
 	if s.httpClientService != nil {
-		s.logger.Trace("close ", s.httpClientService.Name())
-		startTime := time.Now()
-		err = E.Append(err, s.httpClientService.Close(), func(err error) error {
+		cerr := s.closeWithTimeout(s.httpClientService.Name(), closeTimeout, s.httpClientService.Close)
+		err = E.Append(err, cerr, func(err error) error {
 			return E.Cause(err, "close ", s.httpClientService.Name())
 		})
-		s.logger.Trace("close ", s.httpClientService.Name(), " completed (", F.Seconds(time.Since(startTime).Seconds()), "s)")
 	}
-	for _, lifecycleService := range s.internalService {
+	for i, lifecycleService := range s.internalService {
+		if closedInternalServices[i] {
+			continue
+		}
 		cerr := s.closeWithTimeout(lifecycleService.Name(), closeTimeout, lifecycleService.Close)
 		err = E.Append(err, cerr, func(err error) error {
 			return E.Cause(err, "close ", lifecycleService.Name())

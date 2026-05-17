@@ -150,7 +150,7 @@ func (r *Router) routeConnection(ctx context.Context, conn net.Conn, metadata ad
 		selectedOutbound = defaultOutbound
 	}
 
-	releaseAdmission, err := acquireRouteConnectionAdmissionForOutboundType(selectedOutbound.Type())
+	releaseAdmission, err := acquireRouteConnectionAdmissionForOutbound(selectedOutbound.Type(), metadata)
 	if err != nil {
 		buf.ReleaseMulti(buffers)
 		return err
@@ -289,7 +289,7 @@ func (r *Router) routePacketConnection(ctx context.Context, conn N.PacketConn, m
 		}
 		selectedOutbound = defaultOutbound
 	}
-	releaseAdmission, err := acquireRouteConnectionAdmissionForOutboundType(selectedOutbound.Type())
+	releaseAdmission, err := acquireRouteConnectionAdmissionForOutbound(selectedOutbound.Type(), metadata)
 	if err != nil {
 		N.ReleaseMultiPacketBuffer(packetBuffers)
 		return err

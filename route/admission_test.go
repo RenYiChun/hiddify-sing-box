@@ -3,7 +3,9 @@ package route
 import (
 	"testing"
 
+	"github.com/sagernet/sing-box/adapter"
 	C "github.com/sagernet/sing-box/constant"
+	M "github.com/sagernet/sing/common/metadata"
 )
 
 func TestDefaultDirectRouteAdmissionLimitSupportsTunBursts(t *testing.T) {
@@ -60,5 +62,62 @@ func TestSetRouteConnectionAdmissionLimits(t *testing.T) {
 	defer proxyRelease(nil)
 	if _, err := acquireRouteConnectionAdmissionForOutboundType(C.TypeVLESS); err == nil {
 		t.Fatal("expected proxy route admission to reject over limit")
+	}
+}
+
+func TestDirectRouteAdmissionLimitsSingleDestination(t *testing.T) {
+	admission := newRouteConnectionAdmissionSetWithDirectKeyLimit(10, 10, 2)
+	metadata := adapter.InboundContext{
+		Domain: "cube.weixinbridge.com",
+		Destination: M.Socksaddr{
+			Fqdn: "cube.weixinbridge.com",
+			Port: 443,
+		},
+	}
+
+	release1, err := admission.acquireForOutbound(C.TypeDirect, metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release1(nil)
+	release2, err := admission.acquireForOutbound(C.TypeDirect, metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release2(nil)
+	if _, err := admission.acquireForOutbound(C.TypeDirect, metadata); err == nil {
+		t.Fatal("expected same direct destination to be rejected over per-destination limit")
+	}
+
+	otherRelease, err := admission.acquireForOutbound(C.TypeDirect, adapter.InboundContext{
+		Domain: "work.weixin.qq.com",
+		Destination: M.Socksaddr{
+			Fqdn: "work.weixin.qq.com",
+			Port: 443,
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected a different direct destination to be admitted: %v", err)
+	}
+	defer otherRelease(nil)
+}
+
+func TestDirectRouteAdmissionKeyLimitScalesWithTotalLimit(t *testing.T) {
+	tests := []struct {
+		name        string
+		directLimit int
+		want        int
+	}{
+		{name: "default", directLimit: DefaultDirectRouteConnectionAdmissionLimit, want: 512},
+		{name: "configured high", directLimit: 2048, want: 1024},
+		{name: "configured low", directLimit: 64, want: 64},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := defaultDirectRouteConnectionAdmissionKeyLimit(testCase.directLimit); got != testCase.want {
+				t.Fatalf("unexpected direct route per-destination limit: got %d want %d", got, testCase.want)
+			}
+		})
 	}
 }

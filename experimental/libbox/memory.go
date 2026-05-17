@@ -10,7 +10,7 @@ import (
 
 const (
 	mobileMemoryLimit  = 45 * 1024 * 1024
-	desktopMemoryLimit = 512 * 1024 * 1024
+	desktopMemoryLimit = 768 * 1024 * 1024
 )
 
 func SetMemoryLimit(enabled bool) {

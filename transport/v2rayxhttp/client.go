@@ -38,6 +38,8 @@ import (
 type Client struct {
 	ctx            context.Context
 	options        *option.V2RayXHTTPOptions
+	xmuxManager    *XmuxManager
+	xmuxManager2   *XmuxManager
 	getRequestURL  func(sessionId string) url.URL
 	getRequestURL2 func(sessionId string) url.URL
 	getHTTPClient  func() (DialerClient, *XmuxClient)
@@ -73,6 +75,7 @@ func NewClient(ctx context.Context, dialer N.Dialer, serverAddr M.Socksaddr, opt
 	}
 	getRequestURL2 := getRequestURL
 	getHTTPClient2 := getHTTPClient
+	xmuxManager2 := xmuxManager
 	if options.Download != nil {
 		options2 := options.Download
 		dialer2 := dialer
@@ -104,7 +107,7 @@ func NewClient(ctx context.Context, dialer N.Dialer, serverAddr M.Socksaddr, opt
 		if options2.Xmux != nil {
 			xmuxOptions2 = *options2.Xmux
 		}
-		xmuxManager2 := NewXmuxManager(xmuxOptions2, func() XmuxConn {
+		xmuxManager2 = NewXmuxManager(xmuxOptions2, func() XmuxConn {
 			return createHTTPClient(dest2, dialer2, &options2.V2RayXHTTPBaseOptions, tlsConfig2)
 		})
 		getHTTPClient2 = func() (DialerClient, *XmuxClient) {
@@ -115,6 +118,8 @@ func NewClient(ctx context.Context, dialer N.Dialer, serverAddr M.Socksaddr, opt
 	return &Client{
 		ctx:            ctx,
 		options:        &options,
+		xmuxManager:    xmuxManager,
+		xmuxManager2:   xmuxManager2,
 		getHTTPClient:  getHTTPClient,
 		getHTTPClient2: getHTTPClient2,
 		getRequestURL:  getRequestURL,
@@ -252,7 +257,14 @@ func (c *Client) DialContext(ctx context.Context) (net.Conn, error) {
 }
 
 func (c *Client) Close() error {
-	return nil
+	var err error
+	if c.xmuxManager != nil {
+		err = E.Append(err, c.xmuxManager.Close(), nil)
+	}
+	if c.xmuxManager2 != nil && c.xmuxManager2 != c.xmuxManager {
+		err = E.Append(err, c.xmuxManager2.Close(), nil)
+	}
+	return err
 }
 
 func decideHTTPVersion(tlsConfig tls.Config) string {

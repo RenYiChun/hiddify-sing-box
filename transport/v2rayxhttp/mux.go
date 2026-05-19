@@ -10,10 +10,15 @@ import (
 	"time"
 
 	"github.com/sagernet/sing-box/option"
+	E "github.com/sagernet/sing/common/exceptions"
 )
 
 type XmuxConn interface {
 	IsClosed() bool
+}
+
+type closeableXmuxConn interface {
+	Close() error
 }
 
 type XmuxClient struct {
@@ -101,4 +106,19 @@ func (m *XmuxManager) GetXmuxClient(ctx context.Context) *XmuxClient {
 		xmuxClient.leftUsage -= 1
 	}
 	return xmuxClient
+}
+
+func (m *XmuxManager) Close() error {
+	m.mtx.Lock()
+	clients := m.xmuxClients
+	m.xmuxClients = nil
+	m.mtx.Unlock()
+
+	var err error
+	for _, client := range clients {
+		if closer, ok := client.XmuxConn.(closeableXmuxConn); ok {
+			err = E.Append(err, closer.Close(), nil)
+		}
+	}
+	return err
 }

@@ -41,6 +41,15 @@ func (c *DefaultDialerClient) IsClosed() bool {
 	return c.closed
 }
 
+func (c *DefaultDialerClient) Close() error {
+	c.closed = true
+	if c.client != nil {
+		c.client.CloseIdleConnections()
+	}
+	c.uploadRawPool = &sync.Pool{}
+	return nil
+}
+
 func (c *DefaultDialerClient) OpenStream(ctx context.Context, url string, body io.Reader, uploadOnly bool) (wrc io.ReadCloser, remoteAddr, localAddr net.Addr, err error) {
 	// this is done when the TCP/UDP connection to the server was established,
 	// and we can unblock the Dial function and print correct net addresses in

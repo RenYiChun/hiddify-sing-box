@@ -201,11 +201,16 @@ func (s *RemoteRuleSet) loopUpdate() {
 	if time.Since(s.lastUpdated) > s.updateInterval {
 		s.updateOnce()
 	}
+	startupTicker := s.startupTicker
+	if startupTicker == nil {
+		startupTicker = time.NewTicker(time.Minute)
+		defer startupTicker.Stop()
+	}
 	for s.lastUpdated.IsZero() {
 		select {
 		case <-s.ctx.Done():
 			return
-		case <-s.startupTicker.C:
+		case <-startupTicker.C:
 			s.updateOnce()
 		}
 

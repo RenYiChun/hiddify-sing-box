@@ -2,11 +2,15 @@ package rule
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/sagernet/sing-box/adapter"
 	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
 	E "github.com/sagernet/sing/common/exceptions"
 	"github.com/sagernet/sing/common/json/badoption"
@@ -70,6 +74,37 @@ func TestLocalRuleSetReloadRulesRejectsInvalidUpdateBeforeCommit(t *testing.T) {
 	require.Equal(t, int32(1), callbackCount.Load())
 	require.False(t, ruleSet.metadata.ContainsDNSQueryTypeRule)
 	require.True(t, ruleSet.Match(&adapter.InboundContext{Domain: "example.com"}))
+}
+
+func TestRemoteRuleSetLoopUpdateExitsAfterInitialFetchFailureWithoutStartupTicker(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "temporary failure", http.StatusInternalServerError)
+	}))
+	t.Cleanup(server.Close)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	ruleSet := &RemoteRuleSet{
+		ctx:            ctx,
+		cancel:         cancel,
+		logger:         log.NewNOPFactory().NewLogger("router"),
+		options:        option.RuleSet{Tag: "geoip-cn", RemoteOptions: option.RemoteRuleSet{URL: server.URL}},
+		updateInterval: 24 * time.Hour,
+		httpClient:     server.Client(),
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ruleSet.loopUpdate()
+	}()
+
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("expected remote rule-set update loop to exit after context cancellation")
+	}
 }
 
 func TestRemoteRuleSetLoadBytesRejectsInvalidUpdateBeforeCommit(t *testing.T) {

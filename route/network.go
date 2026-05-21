@@ -266,7 +266,16 @@ func (r *NetworkManager) InterfaceFinder() control.InterfaceFinder {
 
 func (r *NetworkManager) UpdateInterfaces() error {
 	if r.platformInterface == nil || !r.platformInterface.UsePlatformNetworkInterfaces() {
-		return r.interfaceFinder.Update()
+		if err := r.interfaceFinder.Update(); err != nil {
+			return err
+		}
+		oldInterfaces := r.networkInterfaces.Load()
+		newInterfaces := networkInterfacesFromControlInterfaces(r.interfaceFinder.Interfaces())
+		r.networkInterfaces.Store(newInterfaces)
+		if len(newInterfaces) > 0 && !networkInterfacesEqual(oldInterfaces, newInterfaces) {
+			r.logger.Info("updated available system networks: ", formatNetworkInterfaces(newInterfaces))
+		}
+		return nil
 	} else {
 		interfaces, err := r.platformInterface.NetworkInterfaces()
 		if err != nil {
@@ -293,25 +302,8 @@ func (r *NetworkManager) UpdateInterfaces() error {
 			return it.Flags&net.FlagUp != 0
 		})
 		r.networkInterfaces.Store(newInterfaces)
-		if len(newInterfaces) > 0 && !slices.EqualFunc(oldInterfaces, newInterfaces, func(oldInterface adapter.NetworkInterface, newInterface adapter.NetworkInterface) bool {
-			return oldInterface.Interface.Index == newInterface.Interface.Index &&
-				oldInterface.Interface.Name == newInterface.Interface.Name &&
-				oldInterface.Interface.Flags == newInterface.Interface.Flags &&
-				oldInterface.Type == newInterface.Type &&
-				oldInterface.Expensive == newInterface.Expensive &&
-				oldInterface.Constrained == newInterface.Constrained
-		}) {
-			r.logger.Info("updated available networks: ", strings.Join(common.Map(newInterfaces, func(it adapter.NetworkInterface) string {
-				var options []string
-				options = append(options, F.ToString(it.Type))
-				if it.Expensive {
-					options = append(options, "expensive")
-				}
-				if it.Constrained {
-					options = append(options, "constrained")
-				}
-				return F.ToString(it.Name, " (", strings.Join(options, ", "), ")")
-			}), ", "))
+		if len(newInterfaces) > 0 && !networkInterfacesEqual(oldInterfaces, newInterfaces) {
+			r.logger.Info("updated available networks: ", formatNetworkInterfaces(newInterfaces))
 		}
 		return nil
 	}
@@ -392,6 +384,64 @@ func selectOutboundDefaultInterface(defaultInterface *control.Interface, interfa
 		return &interfaces[index].Interface
 	}
 	return nil
+}
+
+func networkInterfacesFromControlInterfaces(interfaces []control.Interface) []adapter.NetworkInterface {
+	newInterfaces := make([]adapter.NetworkInterface, 0, len(interfaces))
+	for _, it := range interfaces {
+		if it.Flags&net.FlagUp == 0 {
+			continue
+		}
+		newInterfaces = append(newInterfaces, adapter.NetworkInterface{
+			Interface: it,
+			Type:      inferInterfaceTypeFromName(it.Name),
+		})
+	}
+	return newInterfaces
+}
+
+func inferInterfaceTypeFromName(name string) C.InterfaceType {
+	lowerName := strings.ToLower(name)
+	switch {
+	case strings.Contains(lowerName, "wi-fi"),
+		strings.Contains(lowerName, "wifi"),
+		strings.Contains(lowerName, "wlan"),
+		strings.Contains(lowerName, "wireless"):
+		return C.InterfaceTypeWIFI
+	case strings.Contains(lowerName, "ethernet"):
+		return C.InterfaceTypeEthernet
+	case strings.Contains(lowerName, "cellular"),
+		strings.Contains(lowerName, "wwan"),
+		strings.Contains(lowerName, "mobile"):
+		return C.InterfaceTypeCellular
+	default:
+		return C.InterfaceTypeOther
+	}
+}
+
+func networkInterfacesEqual(oldInterfaces []adapter.NetworkInterface, newInterfaces []adapter.NetworkInterface) bool {
+	return slices.EqualFunc(oldInterfaces, newInterfaces, func(oldInterface adapter.NetworkInterface, newInterface adapter.NetworkInterface) bool {
+		return oldInterface.Interface.Index == newInterface.Interface.Index &&
+			oldInterface.Interface.Name == newInterface.Interface.Name &&
+			oldInterface.Interface.Flags == newInterface.Interface.Flags &&
+			oldInterface.Type == newInterface.Type &&
+			oldInterface.Expensive == newInterface.Expensive &&
+			oldInterface.Constrained == newInterface.Constrained
+	})
+}
+
+func formatNetworkInterfaces(interfaces []adapter.NetworkInterface) string {
+	return strings.Join(common.Map(interfaces, func(it adapter.NetworkInterface) string {
+		var options []string
+		options = append(options, F.ToString(it.Type), F.ToString("index ", it.Index))
+		if it.Expensive {
+			options = append(options, "expensive")
+		}
+		if it.Constrained {
+			options = append(options, "constrained")
+		}
+		return F.ToString(it.Name, " (", strings.Join(options, ", "), ")")
+	}), ", ")
 }
 
 func (r *NetworkManager) ProtectFunc() control.Func {

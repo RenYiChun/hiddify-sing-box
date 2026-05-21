@@ -1,6 +1,7 @@
 package route
 
 import (
+	"net"
 	"testing"
 
 	"github.com/sagernet/sing-box/adapter"
@@ -24,6 +25,25 @@ func TestSelectOutboundDefaultInterfaceSkipsOwnTun(t *testing.T) {
 	}
 	if selected.Name != "Wi-Fi" || selected.Index != 22 {
 		t.Fatalf("expected Wi-Fi to be selected, got %s/%d", selected.Name, selected.Index)
+	}
+}
+
+func TestNetworkInterfacesFromControlInterfacesAllowsFallbackWithoutPlatformInterfaces(t *testing.T) {
+	interfaces := networkInterfacesFromControlInterfaces([]control.Interface{
+		{Name: "sing-tun", Index: 64, Flags: net.FlagUp},
+		{Name: "WLAN", Index: 22, Flags: net.FlagUp},
+	})
+	selected := selectOutboundDefaultInterface(
+		&control.Interface{Name: "sing-tun", Index: 64},
+		interfaces,
+		"sing-tun",
+	)
+
+	if selected == nil {
+		t.Fatal("expected WLAN fallback interface")
+	}
+	if selected.Name != "WLAN" || selected.Index != 22 {
+		t.Fatalf("expected WLAN to be selected, got %s/%d", selected.Name, selected.Index)
 	}
 }
 

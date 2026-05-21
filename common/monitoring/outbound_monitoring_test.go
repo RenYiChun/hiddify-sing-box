@@ -4,12 +4,16 @@ import (
 	"context"
 	"errors"
 	"net"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/common/urltest"
 	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
 )
@@ -159,3 +163,117 @@ func TestInterfaceUpdatedDoesNotStartRegularCycle(t *testing.T) {
 }
 
 var _ adapter.Outbound = readyTestOutbound{}
+
+func TestURLTestFailureUsesSeparateLogFile(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	tempDir := t.TempDir()
+	mainLogPath := filepath.Join(tempDir, "box.log")
+	urlTestLogPath := filepath.Join(tempDir, "url-test.log")
+	mainFactory := newTestLogFactory(t, ctx, mainLogPath)
+
+	options := option.MonitoringOptions{
+		URLs:           []string{defaultURLTest},
+		URLTestLogFile: urlTestLogPath,
+	}
+
+	monitor, err := NewOutboundMonitoring(ctx, mainFactory.NewLogger("monitoring"), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	outbound := readyTestOutbound{tag: "failing"}
+	monitor.outbounds[outbound.Tag()] = &outboundState{
+		outbound:  outbound,
+		invalid:   true,
+		groupTags: []string{},
+	}
+
+	_, err = monitor.tester(ctx, outbound.Tag())
+	if err == nil {
+		t.Fatal("expected URL test to fail")
+	}
+
+	if err := monitor.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := mainFactory.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	mainLog := string(mustReadFile(t, mainLogPath))
+	if strings.Contains(mainLog, "URL test failed") {
+		t.Fatalf("expected main log not to contain URL test failure details, got %q", mainLog)
+	}
+
+	urlTestLog := string(mustReadFile(t, urlTestLogPath))
+	if !strings.Contains(urlTestLog, "outbound failing URL test failed") {
+		t.Fatalf("expected URL test log to contain failure details, got %q", urlTestLog)
+	}
+}
+
+func TestURLTestDetailLoggerUsesSeparateLogFile(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	tempDir := t.TempDir()
+	mainLogPath := filepath.Join(tempDir, "box.log")
+	urlTestLogPath := filepath.Join(tempDir, "url-test.log")
+	mainFactory := newTestLogFactory(t, ctx, mainLogPath)
+
+	monitor, err := NewOutboundMonitoring(ctx, mainFactory.NewLogger("monitoring"), option.MonitoringOptions{
+		URLTestLogFile: urlTestLogPath,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	monitor.urlTestDetailLogger().Warn("Failed try 0 to get IP info: test")
+
+	if err := monitor.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := mainFactory.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	mainLog := string(mustReadFile(t, mainLogPath))
+	if strings.Contains(mainLog, "Failed try 0 to get IP info") {
+		t.Fatalf("expected main log not to contain URL test detail, got %q", mainLog)
+	}
+
+	urlTestLog := string(mustReadFile(t, urlTestLogPath))
+	if !strings.Contains(urlTestLog, "Failed try 0 to get IP info") {
+		t.Fatalf("expected URL test log to contain URL test detail, got %q", urlTestLog)
+	}
+}
+
+func newTestLogFactory(t *testing.T, ctx context.Context, path string) log.Factory {
+	t.Helper()
+	factory, err := log.New(log.Options{
+		Context: ctx,
+		Options: option.LogOptions{
+			Level:        "debug",
+			Output:       path,
+			DisableColor: true,
+		},
+		BaseTime: time.Now(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := factory.Start(); err != nil {
+		t.Fatal(err)
+	}
+	return factory
+}
+
+func mustReadFile(t *testing.T, path string) []byte {
+	t.Helper()
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return content
+}

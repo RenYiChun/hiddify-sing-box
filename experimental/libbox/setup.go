@@ -99,7 +99,13 @@ func Setup(options *SetupOptions) error {
 	applySetupOptions(options)
 	os.MkdirAll(sWorkingPath, 0o777)
 	os.MkdirAll(sTempPath, 0o777)
-	return redirectStderr(filepath.Join(sWorkingPath, "CrashReport-"+sCrashReportSource+".log"))
+	crashPath := crashReportPath(sWorkingPath, sCrashReportSource)
+	os.MkdirAll(filepath.Dir(crashPath), 0o777)
+	return redirectStderr(crashPath)
+}
+
+func crashReportPath(workingPath string, source string) string {
+	return filepath.Join(workingPath, "crash_reports", "pending", "CrashReport-"+source+".log")
 }
 
 func SetLocale(localeId string) error {

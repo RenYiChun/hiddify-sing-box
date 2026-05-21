@@ -55,27 +55,29 @@ func Get(ctx context.Context) *OutboundMonitoring {
 
 // OutboundMonitoring orchestrates URL testing and traffic sampling for outbounds.
 type OutboundMonitoring struct {
-	endpointManager  adapter.EndpointManager
-	outboundManager  adapter.OutboundManager
-	logger           log.ContextLogger
-	cache            adapter.CacheFile
-	ctx              context.Context
-	cancel           context.CancelFunc
-	tag              string
-	pause            pause.Manager
-	pauseCallback    *list.Element[pause.Callback]
-	started          bool
-	urls             []string
-	currentLinkIndex atomic.Uint32
-	access           sync.Mutex
-	idleTimeout      time.Duration
-	lastActive       common.TypedValue[time.Time]
-	workersRunning   atomic.Bool
-	mainInterval     time.Duration
-	debounceWindow   time.Duration
-	urlTestTimeout   time.Duration
-	workersCount     int
-	history          adapter.URLTestHistoryStorage
+	endpointManager   adapter.EndpointManager
+	outboundManager   adapter.OutboundManager
+	logger            log.ContextLogger
+	urlTestLogger     log.ContextLogger
+	urlTestLogFactory log.Factory
+	cache             adapter.CacheFile
+	ctx               context.Context
+	cancel            context.CancelFunc
+	tag               string
+	pause             pause.Manager
+	pauseCallback     *list.Element[pause.Callback]
+	started           bool
+	urls              []string
+	currentLinkIndex  atomic.Uint32
+	access            sync.Mutex
+	idleTimeout       time.Duration
+	lastActive        common.TypedValue[time.Time]
+	workersRunning    atomic.Bool
+	mainInterval      time.Duration
+	debounceWindow    time.Duration
+	urlTestTimeout    time.Duration
+	workersCount      int
+	history           adapter.URLTestHistoryStorage
 
 	mainTicker *time.Ticker
 
@@ -232,15 +234,26 @@ func NewOutboundMonitoring(ctx context.Context, logger log.ContextLogger, option
 	}
 
 	ctx, cancel := context.WithCancel(ctx)
+	urlTestLogFactory, err := newURLTestLogFactory(ctx, options.URLTestLogFile)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	var urlTestLogger log.ContextLogger
+	if urlTestLogFactory != nil {
+		urlTestLogger = urlTestLogFactory.NewLogger("monitoring")
+	}
 	m := &OutboundMonitoring{
-		ctx:             ctx,
-		cancel:          cancel,
-		urls:            cloned,
-		pause:           service.FromContext[pause.Manager](ctx),
-		started:         false,
-		logger:          logger,
-		outboundManager: service.FromContext[adapter.OutboundManager](ctx),
-		endpointManager: service.FromContext[adapter.EndpointManager](ctx),
+		ctx:               ctx,
+		cancel:            cancel,
+		urls:              cloned,
+		pause:             service.FromContext[pause.Manager](ctx),
+		started:           false,
+		logger:            logger,
+		urlTestLogger:     urlTestLogger,
+		urlTestLogFactory: urlTestLogFactory,
+		outboundManager:   service.FromContext[adapter.OutboundManager](ctx),
+		endpointManager:   service.FromContext[adapter.EndpointManager](ctx),
 
 		history: history,
 
@@ -369,7 +382,7 @@ func (m *OutboundMonitoring) TestNow(outboundTag string) error {
 	return m.testNow(outboundTag, true)
 }
 func (m *OutboundMonitoring) testNow(outboundTag string, priority bool) error {
-	m.logger.Info("testing outbound ", outboundTag, " with priority: ", priority)
+	m.infoURLTest("testing outbound ", outboundTag, " with priority: ", priority)
 	if grp, ok := m.groups[outboundTag]; ok {
 		for tag := range grp.outbounds {
 			m.testNow(tag, priority)
@@ -399,11 +412,11 @@ func (m *OutboundMonitoring) testParents(outboundTag string, first bool) {
 		return
 	}
 	if _, ok := m.groups[outboundTag]; !ok && !first {
-		m.logger.Info("testing outbound ", outboundTag)
+		m.infoURLTest("testing outbound ", outboundTag)
 		m.testNow(outboundTag, true)
 	}
 	for _, dep := range state.dependenciesInverse {
-		m.logger.Info("testing parent outbound ", dep, " of ", outboundTag)
+		m.infoURLTest("testing parent outbound ", dep, " of ", outboundTag)
 		m.testParents(dep, false)
 	}
 }
@@ -443,6 +456,7 @@ func (m *OutboundMonitoring) UnsubscribeGroup(groupTag string, observer <-chan G
 }
 
 func (m *OutboundMonitoring) Close() error {
+	var closeErr error
 	m.closerOnce.Do(func() {
 		m.stopTimerWorkers()
 
@@ -456,9 +470,11 @@ func (m *OutboundMonitoring) Close() error {
 		m.cancel()
 		m.workerWG.Wait()
 		m.schedulerWG.Wait()
-
+		if m.urlTestLogFactory != nil {
+			closeErr = m.urlTestLogFactory.Close()
+		}
 	})
-	return nil
+	return closeErr
 }
 
 func (m *OutboundMonitoring) scheduleLoop() {
@@ -524,7 +540,7 @@ func (m *OutboundMonitoring) executeTask(task *testTask) {
 	}
 	if state.testing {
 		state.mu.Unlock()
-		m.logger.Warn("outbound ", task.outboundTag, " URL test already running, skipping duplicate task")
+		m.warnURLTest("outbound ", task.outboundTag, " URL test already running, skipping duplicate task")
 		return
 	}
 	state.testing = true
@@ -532,7 +548,7 @@ func (m *OutboundMonitoring) executeTask(task *testTask) {
 	state.mu.Unlock()
 
 	if cycle < 10 && !state.outbound.IsReady() {
-		m.logger.Info("outbound ", task.outboundTag, " is not ready, skipping test")
+		m.infoURLTest("outbound ", task.outboundTag, " is not ready, skipping test")
 		state.mu.Lock()
 		state.testing = false
 		state.mu.Unlock()
@@ -575,7 +591,7 @@ func (m *OutboundMonitoring) executeTask(task *testTask) {
 	case outcome = <-resultCh:
 	case <-time.After(m.urlTestTimeout + 100*time.Millisecond):
 		cancel()
-		m.logger.Warn("outbound ", task.outboundTag, " URL test exceeded timeout, marking failed")
+		m.warnURLTest("outbound ", task.outboundTag, " URL test exceeded timeout, marking failed")
 		outcome = testOutcome{
 			outboundTag: task.outboundTag,
 			history: adapter.URLTestHistory{
@@ -618,7 +634,7 @@ func (m *OutboundMonitoring) tester(parent context.Context, tag string) (adapter
 	}
 	if err != nil || delay >= TimeoutDelay {
 		his.Delay = TimeoutDelay
-		m.logger.Warn("outbound ", tag, " URL test failed: ", err)
+		m.warnURLTest("outbound ", tag, " URL test failed: ", err)
 		return his, err
 	}
 	select {
@@ -631,7 +647,7 @@ func (m *OutboundMonitoring) tester(parent context.Context, tag string) (adapter
 		ctx, cancel2 := context.WithTimeout(parent, m.urlTestTimeout)
 		defer cancel2()
 
-		newip, t, err := ipinfo.GetIpInfo(m.logger, ctx, out.outbound)
+		newip, t, err := ipinfo.GetIpInfo(m.urlTestDetailLogger(), ctx, out.outbound)
 		if err == nil {
 			his.IpInfo = mergeIpInfo(out.history.IpInfo, newip)
 			if t < his.Delay {
@@ -640,9 +656,9 @@ func (m *OutboundMonitoring) tester(parent context.Context, tag string) (adapter
 		}
 	}
 	if his.IpInfo != nil {
-		m.logger.Info("outbound ", tag, " IP ", fmt.Sprint(his.IpInfo), " (", his.Delay, "ms): ", err)
+		m.infoURLTest("outbound ", tag, " IP ", fmt.Sprint(his.IpInfo), " (", his.Delay, "ms): ", err)
 	} else {
-		m.logger.Info("outbound ", tag, " , IP: -          (", his.Delay, "ms)")
+		m.infoURLTest("outbound ", tag, " , IP: -          (", his.Delay, "ms)")
 	}
 	return his, nil
 }
@@ -653,7 +669,7 @@ func (m *OutboundMonitoring) startCycleOnce() bool {
 	}
 	go func() {
 		defer m.cycleRunning.Store(false)
-		m.logger.Info("starting regular outbound monitoring cycle")
+		m.infoURLTest("starting regular outbound monitoring cycle")
 		m.runCycle()
 	}()
 	return true
@@ -680,10 +696,78 @@ func (m *OutboundMonitoring) runCycle() {
 				success++
 			}
 		}
+		m.logURLTestSummary(cycleID, m.urls[idx], len(outcomes), success)
 		if success > 0 || idx == len(m.urls)-1 {
 			return
 		}
 		m.currentLinkIndex.Store((m.currentLinkIndex.Load() + 1) % uint32(len(m.urls)))
+	}
+}
+
+func newURLTestLogFactory(ctx context.Context, filePath string) (log.Factory, error) {
+	if filePath == "" {
+		return nil, nil
+	}
+	factory, err := log.New(log.Options{
+		Context: ctx,
+		Options: option.LogOptions{
+			Level:        "debug",
+			Output:       filePath,
+			DisableColor: true,
+		},
+		BaseTime: time.Now(),
+	})
+	if err != nil {
+		return nil, E.Cause(err, "create URL test log")
+	}
+	if err := factory.Start(); err != nil {
+		return nil, E.Cause(err, "start URL test log")
+	}
+	return factory, nil
+}
+
+func (m *OutboundMonitoring) warnURLTest(args ...any) {
+	if m.urlTestLogger != nil {
+		m.urlTestLogger.Warn(args...)
+		return
+	}
+	m.logger.Warn(args...)
+}
+
+func (m *OutboundMonitoring) infoURLTest(args ...any) {
+	if m.urlTestLogger != nil {
+		m.urlTestLogger.Info(args...)
+		return
+	}
+	m.logger.Info(args...)
+}
+
+func (m *OutboundMonitoring) urlTestDetailLogger() log.Logger {
+	if m.urlTestLogger != nil {
+		return m.urlTestLogger
+	}
+	return m.logger
+}
+
+func (m *OutboundMonitoring) logURLTestSummary(cycleID uint64, url string, total int, success int) {
+	failed := total - success
+	if failed <= 0 {
+		return
+	}
+	message := []any{
+		"outbound monitoring URL test summary: cycle=", cycleID,
+		" url=", url,
+		" total=", total,
+		" success=", success,
+		" failed=", failed,
+	}
+	if m.urlTestLogger != nil {
+		m.urlTestLogger.Info(message...)
+	}
+	if success == 0 {
+		m.logger.Warn(append(message, " all_failed=true")...)
+	} else {
+		m.logger.Info(message...)
 	}
 }
 

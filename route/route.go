@@ -648,6 +648,10 @@ func (r *Router) actionSniff(
 		r.logger.DebugContext(ctx, "sniff skipped due to port considered as server-first")
 		return
 	} else if metadata.Protocol != "" {
+		if action.OverrideDestination && overrideSniffDestination(metadata) {
+			r.logger.DebugContext(ctx, "duplicate sniff used domain as destination: ", metadata.Domain)
+			return
+		}
 		r.logger.DebugContext(ctx, "duplicate sniff skipped")
 		return
 	}
@@ -685,12 +689,7 @@ func (r *Router) actionSniff(
 		metadata.SniffError = err
 		if err == nil {
 			//goland:noinspection GoDeprecation
-			if action.OverrideDestination && M.IsDomainName(metadata.Domain) {
-				metadata.Destination = M.Socksaddr{
-					Fqdn: metadata.Domain,
-					Port: metadata.Destination.Port,
-				}
-			}
+			overrideSniffDestinationIfEnabled(metadata, action)
 			if metadata.Domain != "" && metadata.Client != "" {
 				r.logger.DebugContext(ctx, "sniffed protocol: ", metadata.Protocol, ", domain: ", metadata.Domain, ", client: ", metadata.Client)
 			} else if metadata.Domain != "" {
@@ -817,12 +816,7 @@ func (r *Router) actionSniff(
 	finally:
 		if err == nil {
 			//goland:noinspection GoDeprecation
-			if action.OverrideDestination && M.IsDomainName(metadata.Domain) {
-				metadata.Destination = M.Socksaddr{
-					Fqdn: metadata.Domain,
-					Port: metadata.Destination.Port,
-				}
-			}
+			overrideSniffDestinationIfEnabled(metadata, action)
 			if metadata.Domain != "" && metadata.Client != "" {
 				r.logger.DebugContext(ctx, "sniffed packet protocol: ", metadata.Protocol, ", domain: ", metadata.Domain, ", client: ", metadata.Client)
 			} else if metadata.Domain != "" {
@@ -835,6 +829,25 @@ func (r *Router) actionSniff(
 		}
 	}
 	return
+}
+
+func overrideSniffDestinationIfEnabled(metadata *adapter.InboundContext, action *R.RuleActionSniff) {
+	if !action.OverrideDestination {
+		return
+	}
+	overrideSniffDestination(metadata)
+}
+
+func overrideSniffDestination(metadata *adapter.InboundContext) bool {
+	if !M.IsDomainName(metadata.Domain) || metadata.Destination.IsDomain() {
+		return false
+	}
+	metadata.Destination = M.Socksaddr{
+		Fqdn: metadata.Domain,
+		Port: metadata.Destination.Port,
+	}
+	metadata.DestinationAddresses = nil
+	return true
 }
 
 func (r *Router) actionResolve(ctx context.Context, metadata *adapter.InboundContext, action *R.RuleActionResolve) error {

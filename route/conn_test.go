@@ -91,6 +91,48 @@ func TestReportConnHandshakeSuccessFallsBackToNetworkReporter(t *testing.T) {
 	}
 }
 
+func TestExpectedConnectionCopyCloseErrorsAreQuiet(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "http2 cancel",
+			err:  errors.New("stream error: stream ID 35; CANCEL; received from peer"),
+			want: true,
+		},
+		{
+			name: "closed pipe",
+			err:  errors.New("read/write on closed pipe"),
+			want: true,
+		},
+		{
+			name: "response body closed",
+			err:  errors.New("response body closed"),
+			want: true,
+		},
+		{
+			name: "no error close",
+			err:  errors.New("stream error: NO_ERROR"),
+			want: true,
+		},
+		{
+			name: "real failure",
+			err:  errors.New("remote tls handshake failed"),
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isExpectedConnectionCopyCloseError(tt.err); got != tt.want {
+				t.Fatalf("expected %v, got %v", tt.want, got)
+			}
+		})
+	}
+}
+
 type nilCachedPacketReader struct {
 	cachedRead bool
 	packetRead bool

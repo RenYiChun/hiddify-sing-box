@@ -2,13 +2,19 @@
 icon: material/new-box
 ---
 
+!!! quote "sing-box 1.14.0 中的更改"
+
+    :material-plus: [control_http_client](#control_http_client)  
+    :material-delete-clock: [拨号字段](#拨号字段)
+
 !!! quote "sing-box 1.13.0 中的更改"
 
     :material-plus: [relay_server_port](#relay_server_port)  
     :material-plus: [relay_server_static_endpoints](#relay_server_static_endpoints)  
     :material-plus: [system_interface](#system_interface)  
     :material-plus: [system_interface_name](#system_interface_name)  
-    :material-plus: [system_interface_mtu](#system_interface_mtu)
+    :material-plus: [system_interface_mtu](#system_interface_mtu)  
+    :material-plus: [advertise_tags](#advertise_tags)
 
 !!! question "自 sing-box 1.12.0 起"
 
@@ -21,6 +27,7 @@ icon: material/new-box
   "state_directory": "",
   "auth_key": "",
   "control_url": "",
+  "control_http_client": {}, // 或 ""
   "ephemeral": false,
   "hostname": "",
   "accept_routes": false,
@@ -28,6 +35,7 @@ icon: material/new-box
   "exit_node_allow_lan_access": false,
   "advertise_routes": [],
   "advertise_exit_node": false,
+  "advertise_tags": [],
   "relay_server_port": 0,
   "relay_server_static_endpoints": [],
   "system_interface": false,
@@ -101,6 +109,14 @@ icon: material/new-box
 
 指示节点是否应将自己通告为出口节点。
 
+#### advertise_tags
+
+!!! question "自 sing-box 1.13.0 起"
+
+为此节点通告的标签，用于 ACL 执行。
+
+示例：`["tag:server"]`
+
 #### relay_server_port
 
 !!! question "自 sing-box 1.13.0 起"
@@ -137,10 +153,18 @@ UDP NAT 过期时间。
 
 默认使用 `5m`。
 
+#### control_http_client
+
+!!! question "自 sing-box 1.14.0 起"
+
+用于连接 Tailscale 控制平面的 HTTP 客户端。
+
+参阅 [HTTP 客户端字段](/zh/configuration/shared/http-client/) 了解详情。
+
 ### 拨号字段
 
-!!! note
+!!! failure "已在 sing-box 1.14.0 废弃"
 
-    Tailscale 端点中的拨号字段仅控制它如何连接到控制平面，与实际连接无关。
+    Tailscale 端点中的拨号字段已在 sing-box 1.14.0 废弃且将在 sing-box 1.16.0 中被移除，请使用 `control_http_client` 代替。
 
 参阅 [拨号字段](/zh/configuration/shared/dial/) 了解详情。

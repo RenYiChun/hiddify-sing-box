@@ -2,9 +2,536 @@
 icon: material/alert-decagram
 ---
 
-#### 1.13.0-beta.7
+#### 1.14.0-alpha.14
 
 * Fixes and improvements
+
+#### 1.14.0-alpha.13
+
+* Unify HTTP client **1**
+* Add Apple HTTP and TLS engines **2**
+* Unify HTTP/2 and QUIC parameters **3**
+* Add TLS spoof **4**
+* Fixes and improvements
+
+**1**:
+
+The new top-level [`http_clients`](/configuration/shared/http-client/)
+option defines reusable HTTP clients (engine, version, dialer, TLS,
+HTTP/2 and QUIC parameters). Components that make outbound HTTP requests
+— remote rule-sets, ACME and Cloudflare Origin CA certificate providers,
+DERP `verify_client_url`, and the Tailscale `control_http_client` — now
+accept an inline HTTP client object or the tag of an `http_clients`
+entry, replacing the dial and TLS fields previously inlined in each
+component. When the field is omitted, ACME, Cloudflare Origin CA, DERP
+and Tailscale dial direct (their existing default).
+
+Remote rule-sets are the only HTTP-using component whose default for an
+omitted `http_client` has historically resolved to the default outbound,
+not to direct, and a typical configuration contains many of them. To
+avoid repeating the same `http_client` block in every rule-set,
+[`route.default_http_client`](/configuration/route/#default_http_client)
+selects a default rule-set client by tag and is the only field that
+consults it. If `default_http_client` is empty and `http_clients` is
+non-empty, the first entry is used automatically. The legacy fallback
+(use the default outbound when `http_clients` is empty altogether) is
+preserved with a deprecation warning and will be removed in sing-box
+1.16.0, together with the legacy `download_detour` remote rule-set
+option and the legacy dialer fields on Tailscale endpoints.
+
+**2**:
+
+A new `apple` engine is available on Apple platforms in two independent
+places:
+
+* [HTTP client `engine`](/configuration/shared/http-client/#engine) —
+  routes HTTP requests through `NSURLSession`.
+* Outbound TLS [`engine`](/configuration/shared/tls/#engine) — routes
+  the TLS handshake through `Network.framework` for direct TCP TLS
+  client connections.
+
+The default remains `go`. Both engines come with additional CGO and
+framework memory overhead and platform restrictions documented on each
+field.
+
+**3**:
+
+[HTTP/2](/configuration/shared/http2/) and
+[QUIC](/configuration/shared/quic/) parameters
+(`idle_timeout`, `keep_alive_period`, `stream_receive_window`,
+`connection_receive_window`, `max_concurrent_streams`,
+`initial_packet_size`, `disable_path_mtu_discovery`) are now shared
+across QUIC-based outbounds
+([Hysteria](/configuration/outbound/hysteria/),
+[Hysteria2](/configuration/outbound/hysteria2/),
+[TUIC](/configuration/outbound/tuic/)) and HTTP clients running HTTP/2
+or HTTP/3.
+
+This deprecates the Hysteria v1 tuning fields `recv_window_conn`,
+`recv_window`, `recv_window_client`, `max_conn_client` and
+`disable_mtu_discovery`; they will be removed in sing-box 1.16.0.
+
+**4**:
+
+Added outbound TLS [`spoof`](/configuration/shared/tls/#spoof) and
+[`spoof_method`](/configuration/shared/tls/#spoof_method) fields. When
+enabled, a forged ClientHello carrying a whitelisted SNI is sent before
+the real handshake to fool SNI-filtering middleboxes. Requires
+`CAP_NET_RAW` + `CAP_NET_ADMIN` or root on Linux and macOS, and
+Administrator privileges on Windows (ARM64 is not supported). IP-literal
+server names are rejected.
+
+#### 1.14.0-alpha.12
+
+* Fix fake-ip DNS server should return SUCCESS when address type is not configured
+* Fixes and improvements
+
+#### 1.13.8
+
+* Update naiveproxy to v147.0.7727.49-1
+* Fix fake-ip DNS server should return SUCCESS when address type is not configured
+* Fixes and improvements
+
+#### 1.14.0-alpha.11
+
+* Add optimistic DNS cache **1**
+* Update NaiveProxy to 147.0.7727.49
+* Fixes and improvements
+
+**1**:
+
+Optimistic DNS cache returns an expired cached response immediately while
+refreshing it in the background, reducing tail latency for repeated
+queries. Enabled via [`optimistic`](/configuration/dns/#optimistic)
+in DNS options, and can be persisted across restarts with the new
+[`store_dns`](/configuration/experimental/cache-file/#store_dns) cache
+file option. A per-query
+[`disable_optimistic_cache`](/configuration/dns/rule_action/#disable_optimistic_cache)
+field is also available on DNS rule actions and the `resolve` route rule
+action.
+
+This deprecates the `independent_cache` DNS option (the DNS cache now
+always keys by transport) and the `store_rdrc` cache file option
+(replaced by `store_dns`); both will be removed in sing-box 1.16.0.
+See [Migration](/migration/#migrate-independent-dns-cache).
+
+#### 1.14.0-alpha.10
+
+* Add `evaluate` DNS rule action and Response Match Fields **1**
+* `ip_version` and `query_type` now also take effect on internal DNS lookups **2**
+* Add `package_name_regex` route, DNS and headless rule item **3**
+* Add cloudflared inbound **4**
+* Fixes and improvements
+
+**1**:
+
+Response Match Fields
+([`response_rcode`](/configuration/dns/rule/#response_rcode),
+[`response_answer`](/configuration/dns/rule/#response_answer),
+[`response_ns`](/configuration/dns/rule/#response_ns),
+and [`response_extra`](/configuration/dns/rule/#response_extra))
+match the evaluated DNS response. They are gated by the new
+[`match_response`](/configuration/dns/rule/#match_response) field and
+populated by a preceding
+[`evaluate`](/configuration/dns/rule_action/#evaluate) DNS rule action;
+the evaluated response can also be returned directly by a
+[`respond`](/configuration/dns/rule_action/#respond) action.
+
+This deprecates the Legacy Address Filter Fields (`ip_cidr`,
+`ip_is_private` without `match_response`) in DNS rules, the Legacy
+`strategy` DNS rule action option, and the Legacy
+`rule_set_ip_cidr_accept_empty` DNS rule item; all three will be removed
+in sing-box 1.16.0.
+See [Migration](/migration/#migrate-address-filter-fields-to-response-matching).
+
+**2**:
+
+`ip_version` and `query_type` in DNS rules, together with `query_type` in
+referenced rule-sets, now take effect on every DNS rule evaluation,
+including matches from internal domain resolutions that do not target a
+specific DNS server (for example a `resolve` route rule action without
+`server` set). In earlier versions they were silently ignored in that
+path. Combining these fields with any of the legacy DNS fields deprecated
+in **1** in the same DNS configuration is no longer supported and is
+rejected at startup.
+See [Migration](/migration/#ip_version-and-query_type-behavior-changes-in-dns-rules).
+
+**3**:
+
+See [Route Rule](/configuration/route/rule/#package_name_regex),
+[DNS Rule](/configuration/dns/rule/#package_name_regex) and
+[Headless Rule](/configuration/rule-set/headless-rule/#package_name_regex).
+
+**4**:
+
+See [Cloudflared](/configuration/inbound/cloudflared/).
+
+#### 1.13.7
+
+* Fixes and improvement
+
+#### 1.13.6
+
+* Fixes and improvements
+
+#### 1.14.0-alpha.8
+
+* Add BBR profile and hop interval randomization for Hysteria2 **1**
+* Fixes and improvements
+
+**1**:
+
+See [Hysteria2 Inbound](/configuration/inbound/hysteria2/#bbr_profile) and [Hysteria2 Outbound](/configuration/outbound/hysteria2/#bbr_profile).
+
+#### 1.14.0-alpha.8
+
+* Fixes and improvements
+
+#### 1.13.5
+
+* Fixes and improvements
+
+#### 1.14.0-alpha.7
+
+* Fixes and improvements
+
+#### 1.13.4
+
+* Fixes and improvements
+
+#### 1.14.0-alpha.4
+
+* Refactor ACME support to certificate provider system **1**
+* Add Cloudflare Origin CA certificate provider **2**
+* Add Tailscale certificate provider **3**
+* Fixes and improvements
+
+**1**:
+
+See [Certificate Provider](/configuration/shared/certificate-provider/) and [Migration](/migration/#migrate-inline-acme-to-certificate-provider).
+
+**2**:
+
+See [Cloudflare Origin CA](/configuration/shared/certificate-provider/cloudflare-origin-ca).
+
+**3**:
+
+See [Tailscale](/configuration/shared/certificate-provider/tailscale).
+
+#### 1.13.3
+
+* Add OpenWrt and Alpine APK packages to release **1**
+* Backport to macOS 10.13 High Sierra **2**
+* OCM service: Add WebSocket support for Responses API **3**
+* Fixes and improvements
+
+**1**:
+
+Alpine APK files use `linux` in the filename to distinguish from OpenWrt APKs which use the `openwrt` prefix:
+
+- OpenWrt: `sing-box_{version}_openwrt_{architecture}.apk`
+- Alpine: `sing-box_{version}_linux_{architecture}.apk`
+
+**2**:
+
+Legacy macOS binaries (with `-legacy-macos-10.13` suffix) now support
+macOS 10.13 High Sierra, built using Go 1.25 with patches
+from [SagerNet/go](https://github.com/SagerNet/go).
+
+**3**:
+
+See [OCM](/configuration/service/ocm).
+
+#### 1.12.24
+
+* Fixes and improvements
+
+#### 1.14.0-alpha.2
+
+* Add OpenWrt and Alpine APK packages to release **1**
+* Backport to macOS 10.13 High Sierra **2**
+* OCM service: Add WebSocket support for Responses API **3**
+* Fixes and improvements
+
+**1**:
+
+Alpine APK files use `linux` in the filename to distinguish from OpenWrt APKs which use the `openwrt` prefix:
+
+- OpenWrt: `sing-box_{version}_openwrt_{architecture}.apk`
+- Alpine: `sing-box_{version}_linux_{architecture}.apk`
+
+**2**:
+
+Legacy macOS binaries (with `-legacy-macos-10.13` suffix) now support
+macOS 10.13 High Sierra, built using Go 1.25 with patches
+from [SagerNet/go](https://github.com/SagerNet/go).
+
+**3**:
+
+See [OCM](/configuration/service/ocm).
+
+#### 1.14.0-alpha.1
+
+* Add `source_mac_address` and `source_hostname` rule items **1**
+* Add `include_mac_address` and `exclude_mac_address` TUN options **2**
+* Update NaiveProxy to 145.0.7632.159 **3**
+* Fixes and improvements
+
+**1**:
+
+New rule items for matching LAN devices by MAC address and hostname via neighbor resolution.
+Supported on Linux, macOS, or in graphical clients on Android and macOS.
+
+See [Route Rule](/configuration/route/rule/#source_mac_address), [DNS Rule](/configuration/dns/rule/#source_mac_address) and [Neighbor Resolution](/configuration/shared/neighbor/).
+
+**2**:
+
+Limit or exclude devices from TUN routing by MAC address.
+Only supported on Linux with `auto_route` and `auto_redirect` enabled.
+
+See [TUN](/configuration/inbound/tun/#include_mac_address).
+
+**3**:
+
+This is not an official update from NaiveProxy. Instead, it's a Chromium codebase update maintained by Project S.
+
+#### 1.13.2
+
+* Fixes and improvements
+
+#### 1.13.1
+
+* Fixes and improvements
+
+#### 1.12.14
+
+* Backport fixes
+
+#### 1.13.0
+
+Important changes since 1.12:
+
+* Add NaiveProxy outbound **1**
+* Add pre-match support for `auto_redirect` **2**
+* Improve `auto_redirect` **3**
+* Add Chrome Root Store certificate option **4**
+* Add new options for ACME DNS-01 challenge providers **5**
+* Add Wi-Fi state support for Linux and Windows **6**
+* Add curve preferences, pinned public key SHA256, mTLS and ECH `query_server_name` for TLS options **7**
+* Add kTLS support **8**
+* Add ICMP echo (ping) proxy support **9**
+* Add `interface_address`, `network_interface_address` and `default_interface_address` rule items **10**
+* Add `preferred_by` route rule item **11**
+* Improve `local` DNS server **12**
+* Add `disable_tcp_keep_alive`, `tcp_keep_alive` and `tcp_keep_alive_interval` options for listen and dial fields **13**
+* Add `bind_address_no_port` option for dial fields **14**
+* Add system interface, relay server and advertise tags options for Tailscale endpoint **15**
+* Add Claude Code Multiplexer service **16**
+* Add OpenAI Codex Multiplexer service **17**
+* Apple/Android: Refactor GUI
+* Apple/Android: Add support for sharing configurations via [QRS](https://github.com/qifi-dev/qrs)
+* Android: Add support for resisting VPN detection via Xposed
+* Drop support for go1.23 **18**
+* Drop support for Android 5.0 **19**
+* Update uTLS to v1.8.2 **20**
+* Update quic-go to v0.59.0
+* Update gVisor to v20250811
+* Update Tailscale to v1.92.4
+
+**1**:
+
+NaiveProxy outbound now supports QUIC, ECH, UDP over TCP, and configurable QUIC congestion control.
+
+Only available on Apple platforms, Android, Windows and some Linux architectures.
+Each Windows release includes `libcronet.dll` —
+ensure this file is in the same directory as `sing-box.exe` or in a directory listed in `PATH`.
+
+See [NaiveProxy outbound](/configuration/outbound/naive/).
+
+**2**:
+
+`auto_redirect` now allows you to bypass sing-box for connections based on routing rules.
+
+A new rule action `bypass` is introduced to support this feature. When matched during pre-match, the connection will bypass sing-box and connect directly.
+
+This feature requires Linux with `auto_redirect` enabled.
+
+See [Pre-match](/configuration/shared/pre-match/) and [Rule Action](/configuration/route/rule_action/#bypass).
+
+**3**:
+
+`auto_redirect` now rejects MPTCP connections by default to fix compatibility issues.
+You can change it to bypass sing-box via the new `exclude_mptcp` option.
+
+Adds a fallback iproute2 rule checked after system default rules (32766: main, 32767: default),
+ensuring traffic is routed to the sing-box table when no route is found in system tables.
+The rule index can be customized via `auto_redirect_iproute2_fallback_rule_index` (default: 32768).
+
+See [TUN](/configuration/inbound/tun/#exclude_mptcp).
+
+**4**:
+
+Adds `chrome` as a new certificate store option alongside `mozilla`.
+Both stores filter out China-based CA certificates.
+
+See [Certificate](/configuration/certificate/#store).
+
+**5**:
+
+See [DNS-01 Challenge](/configuration/shared/dns01_challenge/).
+
+**6**:
+
+sing-box can now monitor Wi-Fi state on Linux and Windows to enable routing rules based on `wifi_ssid` and `wifi_bssid`.
+
+See [Wi-Fi State](/configuration/shared/wifi-state/).
+
+**7**:
+
+See [TLS](/configuration/shared/tls/).
+
+**8**:
+
+Adds `kernel_tx` and `kernel_rx` options for TLS inbound.
+Enables kernel-level TLS offloading via `splice(2)` on Linux 5.1+ with TLS 1.3.
+
+See [TLS](/configuration/shared/tls/).
+
+**9**:
+
+sing-box can now proxy ICMP echo (ping) requests.
+A new `icmp` network type is available for route rules.
+Supported from TUN, WireGuard and Tailscale inbounds to Direct, WireGuard and Tailscale outbounds.
+The `reject` action can also reply to ICMP echo requests.
+
+**10**:
+
+New rule items for matching based on interface IP addresses, available in route rules, DNS rules and rule-sets.
+
+**11**:
+
+Matches outbounds' preferred routes.
+For Tailscale: MagicDNS domains and peers' allowed IPs. For WireGuard: peers' allowed IPs.
+
+**12**:
+
+The `local` DNS server now uses platform-native resolution:
+`getaddrinfo`/libresolv on Apple platforms, systemd-resolved DBus on Linux.
+A new `prefer_go` option is available to opt out.
+
+See [Local DNS](/configuration/dns/server/local/).
+
+**13**:
+
+The default TCP keep-alive initial period has been updated from 10 minutes to 5 minutes.
+
+See [Dial Fields](/configuration/shared/dial/#tcp_keep_alive).
+
+**14**:
+
+Adds the Linux socket option `IP_BIND_ADDRESS_NO_PORT` support when explicitly binding to a source address.
+
+This allows reusing the same source port for multiple connections, improving scalability for high-concurrency proxy scenarios.
+
+See [Dial Fields](/configuration/shared/dial/#bind_address_no_port).
+
+**15**:
+
+Tailscale endpoint can now create a system TUN interface to handle traffic directly.
+New `relay_server_port` and `relay_server_static_endpoints` options for incoming relay connections.
+New `advertise_tags` option for ACL tag advertisement.
+
+See [Tailscale endpoint](/configuration/endpoint/tailscale/).
+
+**16**:
+
+CCM (Claude Code Multiplexer) service allows you to access your local Claude Code subscription remotely through custom tokens, eliminating the need for OAuth authentication on remote clients.
+
+See [CCM](/configuration/service/ccm).
+
+**17**:
+
+See [OCM](/configuration/service/ocm).
+
+**18**:
+
+Due to maintenance difficulties, sing-box 1.13.0 requires at least Go 1.24 to compile.
+
+**19**:
+
+Due to maintenance difficulties, sing-box 1.13.0 will be the last version to support Android 5.0,
+and only through a separate legacy build (with `-legacy-android-5` suffix).
+
+For standalone binaries, the minimum Android version has been raised to Android 6.0,
+since Termux requires Android 7.0 or later.
+
+**20**:
+
+This update fixes missing padding extension for Chrome 120+ fingerprints.
+
+Also, documentation has been updated with a warning about uTLS fingerprinting vulnerabilities.
+uTLS is not recommended for censorship circumvention due to fundamental architectural limitations;
+use NaiveProxy instead for TLS fingerprint resistance.
+
+#### 1.12.23
+
+* Fixes and improvements
+
+#### 1.13.0-rc.5
+
+* Add `mipsle`, `mips64le`, `riscv64` and `loong64` support for NaiveProxy outbound
+
+#### 1.12.22
+
+* Fixes and improvements
+
+#### 1.13.0-rc.3
+
+* Fixes and improvements
+
+#### 1.12.21
+
+* Fixes and improvements
+
+#### 1.13.0-rc.2
+
+* Fixes and improvements
+
+#### 1.12.20
+
+* Fixes and improvements
+
+#### 1.13.0-rc.1
+
+* Fixes and improvements
+
+#### 1.12.19
+
+* Fixes and improvements
+
+#### 1.13.0-beta.8
+
+* Add fallback routing rule for `auto_redirect` **1**
+* Fixes and improvements
+
+**1**:
+
+Adds a fallback iproute2 rule checked after system default rules (32766: main, 32767: default),
+ensuring traffic is routed to the sing-box table when no route is found in system tables.
+
+The rule index can be customized via `auto_redirect_iproute2_fallback_rule_index` (default: 32768).
+
+#### 1.12.18
+
+* Add fallback routing rule for `auto_redirect` **1**
+* Fixes and improvements
+
+**1**:
+
+Adds a fallback iproute2 rule checked after system default rules (32766: main, 32767: default),
+ensuring traffic is routed to the sing-box table when no route is found in system tables.
+
+The rule index can be customized via `auto_redirect_iproute2_fallback_rule_index` (default: 32768).
 
 #### 1.13.0-beta.6
 
@@ -389,7 +916,7 @@ DNS servers are refactored for better performance and scalability.
 
 See [DNS server](/configuration/dns/server/).
 
-For migration, see [Migrate to new DNS server formats](/migration/#migrate-to-new-dns-servers).
+For migration, see [Migrate to new DNS server formats](/migration/#migrate-to-new-dns-server-formats).
 
 Compatibility for old formats will be removed in sing-box 1.14.0.
 
@@ -859,7 +1386,7 @@ DNS servers are refactored for better performance and scalability.
 
 See [DNS server](/configuration/dns/server/).
 
-For migration, see [Migrate to new DNS server formats](/migration/#migrate-to-new-dns-servers).
+For migration, see [Migrate to new DNS server formats](/migration/#migrate-to-new-dns-server-formats).
 
 Compatibility for old formats will be removed in sing-box 1.14.0.
 
@@ -1695,7 +2222,7 @@ See [Migration](/migration/#process_path-format-update-on-windows).
 The new DNS feature allows you to more precisely bypass Chinese websites via **DNS leaks**. Do not use plain local DNS
 if using this method.
 
-See [Address Filter Fields](/configuration/dns/rule#address-filter-fields).
+See [Legacy Address Filter Fields](/configuration/dns/rule#legacy-address-filter-fields).
 
 [Client example](/manual/proxy/client#traffic-bypass-usage-for-chinese-users) updated.
 
@@ -1709,7 +2236,7 @@ the [Client example](/manual/proxy/client#traffic-bypass-usage-for-chinese-users
 **5**:
 
 The new feature allows you to cache the check results of
-[Address filter DNS rule items](/configuration/dns/rule/#address-filter-fields) until expiration.
+[Legacy Address Filter Fields](/configuration/dns/rule/#legacy-address-filter-fields) until expiration.
 
 **6**:
 
@@ -1890,7 +2417,7 @@ See [TUN](/configuration/inbound/tun) inbound.
 **1**:
 
 The new feature allows you to cache the check results of
-[Address filter DNS rule items](/configuration/dns/rule/#address-filter-fields) until expiration.
+[Legacy Address Filter Fields](/configuration/dns/rule/#legacy-address-filter-fields) until expiration.
 
 #### 1.9.0-alpha.7
 
@@ -1937,7 +2464,7 @@ See [Migration](/migration/#process_path-format-update-on-windows).
 The new DNS feature allows you to more precisely bypass Chinese websites via **DNS leaks**. Do not use plain local DNS
 if using this method.
 
-See [Address Filter Fields](/configuration/dns/rule#address-filter-fields).
+See [Legacy Address Filter Fields](/configuration/dns/rule#legacy-address-filter-fields).
 
 [Client example](/manual/proxy/client#traffic-bypass-usage-for-chinese-users) updated.
 

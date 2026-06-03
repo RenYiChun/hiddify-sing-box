@@ -12,7 +12,7 @@ import (
 
 const (
 	DefaultDirectRouteConnectionAdmissionLimit = 1024
-	DefaultProxyRouteConnectionAdmissionLimit  = 256
+	DefaultProxyRouteConnectionAdmissionLimit  = 512
 )
 
 var (

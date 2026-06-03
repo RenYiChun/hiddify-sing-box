@@ -31,6 +31,29 @@ func TestDefaultDirectRouteAdmissionLimitSupportsTunBursts(t *testing.T) {
 	}
 }
 
+func TestDefaultProxyRouteAdmissionLimitSupportsStoreDownloadBursts(t *testing.T) {
+	const expectedProxyBurst = DefaultProxyRouteConnectionAdmissionLimit
+
+	admission := newRouteConnectionAdmissionSet(
+		DefaultDirectRouteConnectionAdmissionLimit,
+		DefaultProxyRouteConnectionAdmissionLimit,
+	)
+	releases := make([]func(error), 0, expectedProxyBurst)
+	defer func() {
+		for _, release := range releases {
+			release(nil)
+		}
+	}()
+
+	for i := 0; i < expectedProxyBurst; i++ {
+		release, err := admission.acquireForOutboundType(C.TypeVLESS)
+		if err != nil {
+			t.Fatalf("proxy route admission rejected connection %d/%d: %v", i+1, expectedProxyBurst, err)
+		}
+		releases = append(releases, release)
+	}
+}
+
 func TestSetRouteConnectionAdmissionLimits(t *testing.T) {
 	SetRouteConnectionAdmissionLimits(DefaultDirectRouteConnectionAdmissionLimit, DefaultProxyRouteConnectionAdmissionLimit)
 	defer SetRouteConnectionAdmissionLimits(DefaultDirectRouteConnectionAdmissionLimit, DefaultProxyRouteConnectionAdmissionLimit)

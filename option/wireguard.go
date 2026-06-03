@@ -49,9 +49,12 @@ type WireGuardWARPEndpointOptions struct {
 	UniqueIdentifier string               `json:"unique_identifier,omitempty"` //h
 	ServerOptions                         //H
 	Noise            hiddify.NoiseOptions `json:"noise,omitempty"` //H
+	AWG              *AwgOptions          `json:"awg,omitempty"`   //H
 	*C.WARPConfig                         //H
 	MTU              uint32               `json:"mtu,omitempty"`
 }
+
+type WARPEndpointOptions = WireGuardWARPEndpointOptions
 
 type WARPProfile struct {
 	ID         string `json:"id,omitempty"`

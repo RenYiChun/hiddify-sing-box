@@ -16,6 +16,7 @@ import (
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
+	awgprotocol "github.com/sagernet/sing-box/protocol/awg"
 	"github.com/sagernet/sing/common"
 	E "github.com/sagernet/sing/common/exceptions"
 	"github.com/sagernet/sing/common/json/badoption"
@@ -25,7 +26,7 @@ import (
 )
 
 func RegisterWARPEndpoint(registry *endpoint.Registry) {
-	endpoint.Register[option.WireGuardWARPEndpointOptions](registry, C.TypeWARP, NewWARPEndpoint)
+	endpoint.Register[option.WARPEndpointOptions](registry, C.TypeWARP, NewWARPEndpoint)
 }
 
 type WARPEndpoint struct {
@@ -36,7 +37,7 @@ type WARPEndpoint struct {
 	mtx sync.Mutex
 }
 
-func NewWARPEndpoint(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag string, options option.WireGuardWARPEndpointOptions) (adapter.Endpoint, error) {
+func NewWARPEndpoint(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag string, options option.WARPEndpointOptions) (adapter.Endpoint, error) {
 	var dependencies []string
 	if options.Detour != "" {
 		dependencies = append(dependencies, options.Detour)
@@ -100,41 +101,11 @@ func NewWARPEndpoint(ctx context.Context, router adapter.Router, logger log.Cont
 		if options.ServerOptions.ServerPort != 0 {
 			perrPort = options.ServerOptions.ServerPort
 		}
-		warpEndpoint.endpoint, err = NewEndpoint(
-			ctx,
-			router,
-			logger,
-			tag,
-			option.WireGuardEndpointOptions{
-				System:                     options.System,
-				Name:                       options.Name,
-				ListenPort:                 options.ListenPort,
-				UDPTimeout:                 options.UDPTimeout,
-				Workers:                    options.Workers,
-				PreallocatedBuffersPerPool: options.PreallocatedBuffersPerPool,
-				DisablePauses:              options.DisablePauses,
-				Noise:                      options.Noise,
-				DialerOptions:              options.DialerOptions,
-
-				Address: badoption.Listable[netip.Prefix]{
-					netip.MustParsePrefix(config.Interface.Addresses.V4 + "/32"),
-					netip.MustParsePrefix(config.Interface.Addresses.V6 + "/128"),
-				},
-				PrivateKey: config.PrivateKey,
-				Peers: []option.WireGuardPeer{
-					{
-						Address:   peerAddr,
-						Port:      perrPort,
-						PublicKey: peer.PublicKey,
-						AllowedIPs: badoption.Listable[netip.Prefix]{
-							netip.MustParsePrefix("0.0.0.0/0"),
-							netip.MustParsePrefix("::/0"),
-						},
-					},
-				},
-				MTU: options.MTU,
-			},
-		)
+		if awgOptions, useAwg := buildWARPAwgEndpointOptions(options, *config, peerAddr, perrPort); useAwg {
+			warpEndpoint.endpoint, err = awgprotocol.NewEndpoint(ctx, router, logger, tag, awgOptions)
+		} else {
+			warpEndpoint.endpoint, err = NewEndpoint(ctx, router, logger, tag, buildWARPWireGuardEndpointOptions(options, *config, peerAddr, perrPort))
+		}
 		if err != nil {
 			logger.ErrorContext(ctx, err)
 			return
@@ -150,6 +121,72 @@ func NewWARPEndpoint(ctx context.Context, router adapter.Router, logger log.Cont
 	}
 	return warpEndpoint, nil
 }
+
+func buildWARPWireGuardEndpointOptions(options option.WARPEndpointOptions, config C.WARPConfig, peerAddr string, peerPort uint16) option.WireGuardEndpointOptions {
+	peer := config.Peers[0]
+	return option.WireGuardEndpointOptions{
+		System:                     options.System,
+		Name:                       options.Name,
+		ListenPort:                 options.ListenPort,
+		UDPTimeout:                 options.UDPTimeout,
+		Workers:                    options.Workers,
+		PreallocatedBuffersPerPool: options.PreallocatedBuffersPerPool,
+		DisablePauses:              options.DisablePauses,
+		Noise:                      options.Noise,
+		DialerOptions:              options.DialerOptions,
+
+		Address:    warpInterfaceAddresses(config),
+		PrivateKey: config.PrivateKey,
+		Peers: []option.WireGuardPeer{
+			{
+				Address:    peerAddr,
+				Port:       peerPort,
+				PublicKey:  peer.PublicKey,
+				AllowedIPs: warpAllowedIPs(),
+			},
+		},
+		MTU: options.MTU,
+	}
+}
+
+func buildWARPAwgEndpointOptions(options option.WARPEndpointOptions, config C.WARPConfig, peerAddr string, peerPort uint16) (option.AwgEndpointOptions, bool) {
+	if options.AWG == nil || !options.AWG.IsAvailble() {
+		return option.AwgEndpointOptions{}, false
+	}
+
+	peer := config.Peers[0]
+	return option.AwgEndpointOptions{
+		PrivateKey:    config.PrivateKey,
+		Address:       warpInterfaceAddresses(config),
+		MTU:           options.MTU,
+		ListenPort:    options.ListenPort,
+		Awg:           *options.AWG,
+		DialerOptions: options.DialerOptions,
+		Peers: []option.AwgPeerOptions{
+			{
+				Address:    peerAddr,
+				Port:       peerPort,
+				PublicKey:  peer.PublicKey,
+				AllowedIPs: warpAllowedIPs(),
+			},
+		},
+	}, true
+}
+
+func warpInterfaceAddresses(config C.WARPConfig) badoption.Listable[netip.Prefix] {
+	return badoption.Listable[netip.Prefix]{
+		netip.MustParsePrefix(config.Interface.Addresses.V4 + "/32"),
+		netip.MustParsePrefix(config.Interface.Addresses.V6 + "/128"),
+	}
+}
+
+func warpAllowedIPs() badoption.Listable[netip.Prefix] {
+	return badoption.Listable[netip.Prefix]{
+		netip.MustParsePrefix("0.0.0.0/0"),
+		netip.MustParsePrefix("::/0"),
+	}
+}
+
 func GetWarpProfile(ctx context.Context, profile *option.WARPProfile) (*cloudflare.CloudflareProfile, error) {
 	var dialer N.Dialer
 	outmanager := service.FromContext[adapter.OutboundManager](ctx)

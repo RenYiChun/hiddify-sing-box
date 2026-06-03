@@ -106,57 +106,58 @@ func genIpcConfig(opts option.AwgEndpointOptions) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	awgOptions := opts.EffectiveAwgOptions()
 	s := "private_key=" + hex.EncodeToString(privateKeyBytes)
 	if opts.ListenPort != 0 {
 		s += "\nlisten_port=" + format.ToString(opts.ListenPort)
 	}
-	if opts.Jc != 0 {
-		s += "\njc=" + format.ToString(opts.Jc)
+	if awgOptions.Jc != 0 {
+		s += "\njc=" + format.ToString(awgOptions.Jc)
 	}
-	if opts.Jmin != 0 {
-		s += "\njmin=" + format.ToString(opts.Jmin)
+	if awgOptions.Jmin != 0 {
+		s += "\njmin=" + format.ToString(awgOptions.Jmin)
 	}
-	if opts.Jmax != 0 {
-		s += "\njmax=" + format.ToString(opts.Jmax)
+	if awgOptions.Jmax != 0 {
+		s += "\njmax=" + format.ToString(awgOptions.Jmax)
 	}
-	if opts.S1 != 0 {
-		s += "\ns1=" + format.ToString(opts.S1)
+	if awgOptions.S1 != 0 {
+		s += "\ns1=" + format.ToString(awgOptions.S1)
 	}
-	if opts.S2 != 0 {
-		s += "\ns2=" + format.ToString(opts.S2)
+	if awgOptions.S2 != 0 {
+		s += "\ns2=" + format.ToString(awgOptions.S2)
 	}
-	if opts.S3 != 0 {
-		s += "\ns3=" + format.ToString(opts.S3)
+	if awgOptions.S3 != 0 {
+		s += "\ns3=" + format.ToString(awgOptions.S3)
 	}
-	if opts.S4 != 0 {
-		s += "\ns4=" + format.ToString(opts.S4)
+	if awgOptions.S4 != 0 {
+		s += "\ns4=" + format.ToString(awgOptions.S4)
 	}
-	if opts.H1 != "" {
-		s += "\nh1=" + opts.H1
+	if awgOptions.H1 != "" {
+		s += "\nh1=" + awgOptions.H1
 	}
-	if opts.H2 != "" {
-		s += "\nh2=" + opts.H2
+	if awgOptions.H2 != "" {
+		s += "\nh2=" + awgOptions.H2
 	}
-	if opts.H3 != "" {
-		s += "\nh3=" + opts.H3
+	if awgOptions.H3 != "" {
+		s += "\nh3=" + awgOptions.H3
 	}
-	if opts.H4 != "" {
-		s += "\nh4=" + opts.H4
+	if awgOptions.H4 != "" {
+		s += "\nh4=" + awgOptions.H4
 	}
-	if opts.I1 != "" {
-		s += "\ni1=" + opts.I1
+	if awgOptions.I1 != "" {
+		s += "\ni1=" + awgOptions.I1
 	}
-	if opts.I2 != "" {
-		s += "\ni2=" + opts.I2
+	if awgOptions.I2 != "" {
+		s += "\ni2=" + awgOptions.I2
 	}
-	if opts.I3 != "" {
-		s += "\ni3=" + opts.I3
+	if awgOptions.I3 != "" {
+		s += "\ni3=" + awgOptions.I3
 	}
-	if opts.I4 != "" {
-		s += "\ni4=" + opts.I4
+	if awgOptions.I4 != "" {
+		s += "\ni4=" + awgOptions.I4
 	}
-	if opts.I5 != "" {
-		s += "\ni5=" + opts.I5
+	if awgOptions.I5 != "" {
+		s += "\ni5=" + awgOptions.I5
 	}
 
 	for _, peer := range opts.Peers {

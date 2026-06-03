@@ -95,7 +95,7 @@ func (r *Router) routeConnection(ctx context.Context, conn net.Conn, metadata ad
 	if deadline.NeedAdditionalReadDeadline(conn) {
 		conn = deadline.NewConn(conn)
 	}
-	selectedRule, _, buffers, _, err := r.matchRule(ctx, &metadata, false, false, conn, nil)
+	selectedRule, selectedRuleIndex, buffers, _, err := r.matchRule(ctx, &metadata, false, false, conn, nil)
 	if err != nil {
 		return err
 	}
@@ -149,6 +149,7 @@ func (r *Router) routeConnection(ctx context.Context, conn net.Conn, metadata ad
 		}
 		selectedOutbound = defaultOutbound
 	}
+	r.logProcessRouteMatch(ctx, &metadata, selectedRule, selectedRuleIndex, selectedOutbound)
 
 	releaseAdmission, err := acquireRouteConnectionAdmissionForOutbound(selectedOutbound.Type(), metadata)
 	if err != nil {
@@ -238,7 +239,7 @@ func (r *Router) routePacketConnection(ctx context.Context, conn N.PacketConn, m
 		conn = deadline.NewPacketConn(bufio.NewNetPacketConn(conn))
 	}*/
 
-	selectedRule, _, _, packetBuffers, err := r.matchRule(ctx, &metadata, false, false, nil, conn)
+	selectedRule, selectedRuleIndex, _, packetBuffers, err := r.matchRule(ctx, &metadata, false, false, nil, conn)
 	if err != nil {
 		return err
 	}
@@ -289,6 +290,7 @@ func (r *Router) routePacketConnection(ctx context.Context, conn N.PacketConn, m
 		}
 		selectedOutbound = defaultOutbound
 	}
+	r.logProcessRouteMatch(ctx, &metadata, selectedRule, selectedRuleIndex, selectedOutbound)
 	releaseAdmission, err := acquireRouteConnectionAdmissionForOutbound(selectedOutbound.Type(), metadata)
 	if err != nil {
 		N.ReleaseMultiPacketBuffer(packetBuffers)
@@ -316,6 +318,103 @@ func (r *Router) routePacketConnection(ctx context.Context, conn N.PacketConn, m
 		r.connection.NewPacketConnection(ctx, selectedOutbound, conn, metadata, onClose)
 	}
 	return nil
+}
+
+type processMatcherRule interface {
+	ContainsProcessMatcher() bool
+}
+
+func (r *Router) logProcessRouteMatch(
+	ctx context.Context,
+	metadata *adapter.InboundContext,
+	selectedRule adapter.Rule,
+	selectedRuleIndex int,
+	selectedOutbound adapter.Outbound,
+) {
+	if selectedOutbound == nil {
+		return
+	}
+	message, ok := processRouteMatchMessage(
+		metadata,
+		selectedRule,
+		selectedRuleIndex,
+		selectedOutbound.Tag(),
+		adapter.OutboundTag(selectedOutbound),
+	)
+	if !ok {
+		return
+	}
+	r.logger.InfoContext(ctx, message)
+}
+
+func processRouteMatchMessage(
+	metadata *adapter.InboundContext,
+	selectedRule adapter.Rule,
+	selectedRuleIndex int,
+	outboundTag string,
+	selectedOutboundTag string,
+) (string, bool) {
+	if metadata == nil || selectedRule == nil || outboundTag == "" {
+		return "", false
+	}
+	processRule, ok := selectedRule.(processMatcherRule)
+	if !ok || !processRule.ContainsProcessMatcher() {
+		return "", false
+	}
+	action := selectedRule.Action()
+	if action == nil || action.Type() != C.RuleActionTypeRoute {
+		return "", false
+	}
+
+	parts := []string{
+		"process route matched",
+		F.ToString("rule_index=", selectedRuleIndex),
+		F.ToString("network=", metadata.Network),
+		F.ToString("source=", metadata.Source),
+		F.ToString("destination=", metadata.Destination),
+		F.ToString("outbound=", outboundTag),
+	}
+	if selectedOutboundTag != "" && selectedOutboundTag != outboundTag {
+		parts = append(parts, F.ToString("selected_outbound=", selectedOutboundTag))
+	}
+	if ruleDescription := selectedRule.String(); ruleDescription != "" {
+		parts = append(parts, F.ToString("rule=", ruleDescription))
+	}
+	if metadata.ProcessInfo != nil {
+		if processName := processNameForRouteDiagnostics(metadata.ProcessInfo); processName != "" {
+			parts = append(parts, F.ToString("process_name=", processName))
+		}
+		if processPath := strings.TrimSpace(metadata.ProcessInfo.ProcessPath); processPath != "" {
+			parts = append(parts, F.ToString("process_path=", processPath))
+		}
+		if len(metadata.ProcessInfo.AndroidPackageNames) > 0 {
+			parts = append(parts, F.ToString("packages=", strings.Join(metadata.ProcessInfo.AndroidPackageNames, ",")))
+		}
+		if metadata.ProcessInfo.UserName != "" {
+			parts = append(parts, F.ToString("user=", metadata.ProcessInfo.UserName))
+		} else if metadata.ProcessInfo.UserId != -1 {
+			parts = append(parts, F.ToString("user_id=", metadata.ProcessInfo.UserId))
+		}
+	}
+	return strings.Join(parts, ", "), true
+}
+
+func processNameForRouteDiagnostics(processInfo *adapter.ConnectionOwner) string {
+	if processInfo == nil {
+		return ""
+	}
+	processPath := strings.TrimSpace(processInfo.ProcessPath)
+	if processPath == "" {
+		if len(processInfo.AndroidPackageNames) > 0 {
+			return processInfo.AndroidPackageNames[0]
+		}
+		return ""
+	}
+	index := strings.LastIndexAny(processPath, `\/`)
+	if index >= 0 && index+1 < len(processPath) {
+		return processPath[index+1:]
+	}
+	return processPath
 }
 
 func (r *Router) PreMatch(metadata adapter.InboundContext, routeContext tun.DirectRouteContext, timeout time.Duration, supportBypass bool) (tun.DirectRouteDestination, error) {

@@ -63,8 +63,9 @@ func NewDefaultRule(ctx context.Context, logger log.ContextLogger, options optio
 	}
 	rule := &DefaultRule{
 		abstractDefaultRule{
-			invert: options.Invert,
-			action: action,
+			invert:                 options.Invert,
+			action:                 action,
+			containsProcessMatcher: defaultRuleContainsProcessMatcher(options),
 		},
 	}
 	router := service.FromContext[adapter.Router](ctx)
@@ -353,6 +354,28 @@ func NewLogicalRule(ctx context.Context, logger log.ContextLogger, options optio
 			return nil, E.Cause(err, "sub rule[", i, "]")
 		}
 		rule.rules[i] = subRule
+		if headlessRuleContainsProcessMatcher(subRule) {
+			rule.containsProcessMatcher = true
+		}
 	}
 	return rule, nil
+}
+
+type processMatcherRule interface {
+	ContainsProcessMatcher() bool
+}
+
+func headlessRuleContainsProcessMatcher(rule adapter.HeadlessRule) bool {
+	processRule, ok := rule.(processMatcherRule)
+	return ok && processRule.ContainsProcessMatcher()
+}
+
+func defaultRuleContainsProcessMatcher(options option.DefaultRule) bool {
+	return len(options.ProcessName) > 0 ||
+		len(options.ProcessPath) > 0 ||
+		len(options.ProcessPathRegex) > 0 ||
+		len(options.PackageName) > 0 ||
+		len(options.PackageNameRegex) > 0 ||
+		len(options.User) > 0 ||
+		len(options.UserID) > 0
 }

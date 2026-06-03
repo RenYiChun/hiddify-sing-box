@@ -21,6 +21,7 @@ type abstractDefaultRule struct {
 	ruleSetItem             RuleItem
 	invert                  bool
 	action                  adapter.RuleAction
+	containsProcessMatcher  bool
 }
 
 func (r *abstractDefaultRule) Type() string {
@@ -175,6 +176,10 @@ func (r *abstractDefaultRule) Action() adapter.RuleAction {
 	return r.action
 }
 
+func (r *abstractDefaultRule) ContainsProcessMatcher() bool {
+	return r.containsProcessMatcher
+}
+
 func (r *abstractDefaultRule) String() string {
 	if !r.invert {
 		return strings.Join(F.MapToString(r.allItems), " ")
@@ -184,10 +189,11 @@ func (r *abstractDefaultRule) String() string {
 }
 
 type abstractLogicalRule struct {
-	rules  []adapter.HeadlessRule
-	mode   string
-	invert bool
-	action adapter.RuleAction
+	rules                  []adapter.HeadlessRule
+	mode                   string
+	invert                 bool
+	action                 adapter.RuleAction
+	containsProcessMatcher bool
 }
 
 func (r *abstractLogicalRule) Type() string {
@@ -274,6 +280,10 @@ func (r *abstractLogicalRule) matchStatesWithBase(metadata *adapter.InboundConte
 
 func (r *abstractLogicalRule) Action() adapter.RuleAction {
 	return r.action
+}
+
+func (r *abstractLogicalRule) ContainsProcessMatcher() bool {
+	return r.containsProcessMatcher
 }
 
 func (r *abstractLogicalRule) String() string {

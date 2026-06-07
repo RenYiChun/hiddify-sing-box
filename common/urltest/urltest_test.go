@@ -93,3 +93,15 @@ func TestURLTestDoesNotFallbackWhenHEADSucceeds(t *testing.T) {
 		t.Fatalf("expected only HEAD, got %v", methods)
 	}
 }
+
+func TestURLTestRejectsServerErrors(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer server.Close()
+
+	_, err := URLTest(context.Background(), server.URL, fixedAddressDialer{address: server.Listener.Addr().String()})
+	if err == nil {
+		t.Fatal("expected URL test to reject 5xx responses")
+	}
+}

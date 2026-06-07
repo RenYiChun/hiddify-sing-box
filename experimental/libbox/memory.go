@@ -9,8 +9,9 @@ import (
 )
 
 const (
-	mobileMemoryLimit  = 45 * 1024 * 1024
 	desktopMemoryLimit = 768 * 1024 * 1024
+	iosMemoryLimit     = 45 * 1024 * 1024
+	androidMemoryLimit = desktopMemoryLimit
 )
 
 func SetMemoryLimit(enabled bool) {
@@ -29,9 +30,15 @@ func SetMemoryLimit(enabled bool) {
 }
 
 func defaultMemoryLimit() uint64 {
-	switch runtime.GOOS {
-	case "android", "ios":
-		return mobileMemoryLimit
+	return memoryLimitForGOOS(runtime.GOOS)
+}
+
+func memoryLimitForGOOS(goos string) uint64 {
+	switch goos {
+	case "android":
+		return androidMemoryLimit
+	case "ios":
+		return iosMemoryLimit
 	default:
 		return desktopMemoryLimit
 	}

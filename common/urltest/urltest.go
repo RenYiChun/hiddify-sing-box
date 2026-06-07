@@ -179,7 +179,12 @@ func urlTestWithMethod(ctx context.Context, link string, detour N.Dialer, method
 	if err != nil {
 		return
 	}
+	statusCode := resp.StatusCode
 	resp.Body.Close()
+	if statusCode >= http.StatusInternalServerError {
+		err = fmt.Errorf("%s URL test returned HTTP status %d", method, statusCode)
+		return
+	}
 
 	t = uint16(time.Since(start) / time.Millisecond)
 
@@ -202,7 +207,12 @@ func urlTestWithMethod(ctx context.Context, link string, detour N.Dialer, method
 		if err != nil {
 			return
 		}
+		statusCode = resp.StatusCode
 		resp.Body.Close()
+		if statusCode >= http.StatusInternalServerError {
+			err = fmt.Errorf("%s URL test returned HTTP status %d", method, statusCode)
+			return
+		}
 		t = uint16(time.Since(second) / time.Millisecond) //to avid timeout in the second call
 	}
 	return

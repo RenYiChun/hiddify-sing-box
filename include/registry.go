@@ -25,6 +25,7 @@ import (
 	"github.com/sagernet/sing-box/protocol/group"
 	"github.com/sagernet/sing-box/protocol/group/balancer"
 	"github.com/sagernet/sing-box/protocol/hiddify/dnstt"
+	"github.com/sagernet/sing-box/protocol/hiddify/gooserelay"
 	"github.com/sagernet/sing-box/protocol/hiddify/hinvalid"
 
 	"github.com/sagernet/sing-box/protocol/hiddify/xray"
@@ -46,6 +47,7 @@ import (
 	"github.com/sagernet/sing-box/protocol/vmess"
 	originca "github.com/sagernet/sing-box/service/origin_ca"
 	"github.com/sagernet/sing-box/service/resolved"
+	smartdnspool "github.com/sagernet/sing-box/service/smart_dns_pool"
 	"github.com/sagernet/sing-box/service/ssmapi"
 	E "github.com/sagernet/sing/common/exceptions"
 )
@@ -109,6 +111,7 @@ func OutboundRegistry() *outbound.Registry {
 	hinvalid.RegisterOutbound(registry)
 	xray.RegisterOutbound(registry)
 	dnstt.RegisterOutbound(registry)
+	gooserelay.RegisterOutbound(registry)
 	balancer.RegisterLoadBalance(registry)
 
 	registerQUICOutbounds(registry)
@@ -157,6 +160,7 @@ func ServiceRegistry() *service.Registry {
 
 	resolved.RegisterService(registry)
 	ssmapi.RegisterService(registry)
+	smartdnspool.RegisterService(registry) //H
 
 	registerDERPService(registry)
 	registerCCMService(registry)

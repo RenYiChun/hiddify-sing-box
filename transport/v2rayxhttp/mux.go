@@ -69,43 +69,73 @@ func (m *XmuxManager) newXmuxClient() *XmuxClient {
 
 func (m *XmuxManager) GetXmuxClient(ctx context.Context) *XmuxClient {
 	m.mtx.Lock()
-	defer m.mtx.Unlock()
+	now := time.Now()
+	retiredConnections := m.removeRetiredClientsLocked(now)
+	reusableClients := make([]*XmuxClient, 0, len(m.xmuxClients))
+	for _, xmuxClient := range m.xmuxClients {
+		if xmuxClient.isReusable(now) {
+			reusableClients = append(reusableClients, xmuxClient)
+		}
+	}
+
+	var selectedClient *XmuxClient
+	if len(reusableClients) == 0 {
+		selectedClient = m.newXmuxClient()
+	} else if m.connections > 0 && len(reusableClients) < int(m.connections) {
+		selectedClient = m.newXmuxClient()
+	} else {
+		xmuxClients := reusableClients
+		if m.concurrency > 0 {
+			xmuxClients = make([]*XmuxClient, 0, len(reusableClients))
+			for _, xmuxClient := range reusableClients {
+				if xmuxClient.OpenUsage.Load() < m.concurrency {
+					xmuxClients = append(xmuxClients, xmuxClient)
+				}
+			}
+		}
+		if len(xmuxClients) == 0 {
+			selectedClient = m.newXmuxClient()
+		} else {
+			i, _ := rand.Int(rand.Reader, big.NewInt(int64(len(xmuxClients))))
+			selectedClient = xmuxClients[i.Int64()]
+			if selectedClient.leftUsage > 0 {
+				selectedClient.leftUsage -= 1
+			}
+		}
+	}
+	m.mtx.Unlock()
+
+	closeXmuxConnections(retiredConnections)
+	return selectedClient
+}
+
+func (c *XmuxClient) isReusable(now time.Time) bool {
+	return !c.XmuxConn.IsClosed() &&
+		c.leftUsage != 0 &&
+		c.LeftRequests.Load() > 0 &&
+		(c.UnreusableAt.IsZero() || !now.After(c.UnreusableAt))
+}
+
+func (m *XmuxManager) removeRetiredClientsLocked(now time.Time) []closeableXmuxConn {
+	retiredConnections := make([]closeableXmuxConn, 0)
 	for i := 0; i < len(m.xmuxClients); {
 		xmuxClient := m.xmuxClients[i]
-		if xmuxClient.XmuxConn.IsClosed() ||
-			xmuxClient.leftUsage == 0 ||
-			xmuxClient.LeftRequests.Load() <= 0 ||
-			(xmuxClient.UnreusableAt != time.Time{} && time.Now().After(xmuxClient.UnreusableAt)) {
+		if !xmuxClient.isReusable(now) && xmuxClient.OpenUsage.Load() == 0 {
 			m.xmuxClients = append(m.xmuxClients[:i], m.xmuxClients[i+1:]...)
+			if closer, ok := xmuxClient.XmuxConn.(closeableXmuxConn); ok {
+				retiredConnections = append(retiredConnections, closer)
+			}
 		} else {
 			i++
 		}
 	}
-	if len(m.xmuxClients) == 0 {
-		return m.newXmuxClient()
+	return retiredConnections
+}
+
+func closeXmuxConnections(connections []closeableXmuxConn) {
+	for _, connection := range connections {
+		_ = connection.Close()
 	}
-	if m.connections > 0 && len(m.xmuxClients) < int(m.connections) {
-		return m.newXmuxClient()
-	}
-	xmuxClients := make([]*XmuxClient, 0)
-	if m.concurrency > 0 {
-		for _, xmuxClient := range m.xmuxClients {
-			if xmuxClient.OpenUsage.Load() < m.concurrency {
-				xmuxClients = append(xmuxClients, xmuxClient)
-			}
-		}
-	} else {
-		xmuxClients = m.xmuxClients
-	}
-	if len(xmuxClients) == 0 {
-		return m.newXmuxClient()
-	}
-	i, _ := rand.Int(rand.Reader, big.NewInt(int64(len(xmuxClients))))
-	xmuxClient := xmuxClients[i.Int64()]
-	if xmuxClient.leftUsage > 0 {
-		xmuxClient.leftUsage -= 1
-	}
-	return xmuxClient
 }
 
 func (m *XmuxManager) Close() error {

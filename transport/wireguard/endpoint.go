@@ -235,6 +235,10 @@ func (e *Endpoint) Close() error {
 	if e.device != nil {
 		e.device.Down()
 		e.device.Close()
+		return nil
+	}
+	if e.tunDevice != nil {
+		return e.tunDevice.Close()
 	}
 	return nil
 }

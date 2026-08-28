@@ -128,6 +128,14 @@ func NewClient(ctx context.Context, dialer N.Dialer, serverAddr M.Socksaddr, opt
 }
 
 func (c *Client) DialContext(ctx context.Context) (net.Conn, error) {
+	connectionCtx, cancelConnection := context.WithCancel(context.WithoutCancel(ctx))
+	stopDialCancellation := context.AfterFunc(ctx, cancelConnection)
+	finishDial := func() error {
+		if !stopDialCancellation() {
+			<-connectionCtx.Done()
+		}
+		return connectionCtx.Err()
+	}
 	options := c.options
 	mode := c.options.Mode
 	sessionIdUuid := uuid.New()
@@ -149,6 +157,8 @@ func (c *Client) DialContext(ctx context.Context) (net.Conn, error) {
 			if closed.Add(1) > 1 {
 				return
 			}
+			stopDialCancellation()
+			cancelConnection()
 			if xmuxClient != nil {
 				xmuxClient.OpenUsage.Add(-1)
 			}
@@ -163,8 +173,13 @@ func (c *Client) DialContext(ctx context.Context) (net.Conn, error) {
 		if xmuxClient != nil {
 			xmuxClient.LeftRequests.Add(-1)
 		}
-		conn.reader, conn.remoteAddr, conn.localAddr, err = httpClient.OpenStream(ctx, requestURL.String(), reader, false)
+		conn.reader, conn.remoteAddr, conn.localAddr, err = httpClient.OpenStream(connectionCtx, requestURL.String(), reader, false)
 		if err != nil { // browser dialer only
+			_ = conn.Close()
+			return nil, err
+		}
+		if err = finishDial(); err != nil {
+			_ = conn.Close()
 			return nil, err
 		}
 		return &conn, nil
@@ -172,8 +187,9 @@ func (c *Client) DialContext(ctx context.Context) (net.Conn, error) {
 		if xmuxClient2 != nil {
 			xmuxClient2.LeftRequests.Add(-1)
 		}
-		conn.reader, conn.remoteAddr, conn.localAddr, err = httpClient2.OpenStream(ctx, requestURL2.String(), nil, false)
+		conn.reader, conn.remoteAddr, conn.localAddr, err = httpClient2.OpenStream(connectionCtx, requestURL2.String(), nil, false)
 		if err != nil { // browser dialer only
+			_ = conn.Close()
 			return nil, err
 		}
 	}
@@ -181,8 +197,13 @@ func (c *Client) DialContext(ctx context.Context) (net.Conn, error) {
 		if xmuxClient != nil {
 			xmuxClient.LeftRequests.Add(-1)
 		}
-		_, _, _, err = httpClient.OpenStream(ctx, requestURL.String(), reader, true)
+		_, _, _, err = httpClient.OpenStream(connectionCtx, requestURL.String(), reader, true)
 		if err != nil { // browser dialer only
+			_ = conn.Close()
+			return nil, err
+		}
+		if err = finishDial(); err != nil {
+			_ = conn.Close()
 			return nil, err
 		}
 		return &conn, nil
@@ -207,7 +228,7 @@ func (c *Client) DialContext(ctx context.Context) (net.Conn, error) {
 		var lastWrite time.Time
 		for {
 			wroteRequest := done.New()
-			ctx := httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{
+			requestCtx := httptrace.WithClientTrace(connectionCtx, &httptrace.ClientTrace{
 				WroteRequest: func(httptrace.WroteRequestInfo) {
 					wroteRequest.Close()
 				},
@@ -234,7 +255,7 @@ func (c *Client) DialContext(ctx context.Context) (net.Conn, error) {
 			}
 			go func() {
 				err := httpClient.PostPacket(
-					ctx,
+					requestCtx,
 					url.String(),
 					&buf.MultiBufferContainer{MultiBuffer: chunk},
 					int64(chunk.Len()),
@@ -246,13 +267,17 @@ func (c *Client) DialContext(ctx context.Context) (net.Conn, error) {
 			}()
 			if _, ok := httpClient.(*DefaultDialerClient); ok {
 				select {
-				case <-ctx.Done():
+				case <-connectionCtx.Done():
 				case <-wroteRequest.Wait():
 				}
 
 			}
 		}
 	}()
+	if err = finishDial(); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
 	return &conn, nil
 }
 

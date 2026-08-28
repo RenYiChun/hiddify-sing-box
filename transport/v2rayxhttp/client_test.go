@@ -3,8 +3,12 @@ package xhttp
 import (
 	"context"
 	"errors"
+	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"testing"
+	"time"
 
 	"github.com/sagernet/sing-box/option"
 )
@@ -12,6 +16,40 @@ import (
 type testClosableRoundTripper struct {
 	closeCount     int
 	closeIdleCount int
+}
+
+type contextBlockingRoundTripper struct {
+	started chan struct{}
+	done    chan struct{}
+}
+
+type contextRecordingDialerClient struct {
+	contexts chan context.Context
+}
+
+func (c *contextRecordingDialerClient) IsClosed() bool {
+	return false
+}
+
+func (c *contextRecordingDialerClient) OpenStream(
+	ctx context.Context,
+	_ string,
+	_ io.Reader,
+	_ bool,
+) (io.ReadCloser, net.Addr, net.Addr, error) {
+	c.contexts <- ctx
+	return http.NoBody, nil, nil, nil
+}
+
+func (c *contextRecordingDialerClient) PostPacket(context.Context, string, io.Reader, int64) error {
+	return nil
+}
+
+func (t *contextBlockingRoundTripper) RoundTrip(request *http.Request) (*http.Response, error) {
+	close(t.started)
+	<-request.Context().Done()
+	close(t.done)
+	return nil, request.Context().Err()
 }
 
 func (t *testClosableRoundTripper) RoundTrip(*http.Request) (*http.Response, error) {
@@ -154,5 +192,135 @@ func TestClientCloseClosesXmuxManagers(t *testing.T) {
 	}
 	if !secondaryConn.closed {
 		t.Fatal("expected secondary xmux connection to be closed")
+	}
+}
+
+func TestDefaultDialerClientOpenStreamHonorsContextCancellation(t *testing.T) {
+	transport := &contextBlockingRoundTripper{
+		started: make(chan struct{}),
+		done:    make(chan struct{}),
+	}
+	client := &DefaultDialerClient{
+		options: &option.V2RayXHTTPBaseOptions{},
+		client:  &http.Client{Transport: transport},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan io.ReadCloser, 1)
+	go func() {
+		stream, _, _, _ := client.OpenStream(ctx, "http://example.test/", nil, false)
+		result <- stream
+	}()
+
+	<-transport.started
+	cancel()
+	stream := <-result
+	if stream != nil {
+		_ = stream.Close()
+	}
+	select {
+	case <-transport.done:
+	case <-time.After(time.Second):
+		t.Fatal("expected OpenStream request to stop after context cancellation")
+	}
+}
+
+func TestDefaultDialerClientPostPacketHonorsContextCancellation(t *testing.T) {
+	transport := &contextBlockingRoundTripper{
+		started: make(chan struct{}),
+		done:    make(chan struct{}),
+	}
+	client := &DefaultDialerClient{
+		options: &option.V2RayXHTTPBaseOptions{},
+		client:  &http.Client{Transport: transport},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		result <- client.PostPacket(ctx, "http://example.test/", nil, 0)
+	}()
+
+	<-transport.started
+	cancel()
+	select {
+	case <-transport.done:
+	case <-time.After(time.Second):
+		t.Fatal("expected PostPacket request to stop after context cancellation")
+	}
+	if err := <-result; err == nil {
+		t.Fatal("expected canceled PostPacket to return an error")
+	}
+}
+
+func TestClientDialContextDetachesCallerCancellationUntilConnectionClose(t *testing.T) {
+	dialerClient := &contextRecordingDialerClient{contexts: make(chan context.Context, 1)}
+	requestURL := func(string) url.URL {
+		return url.URL{Scheme: "http", Host: "example.test", Path: "/"}
+	}
+	client := &Client{
+		options:        &option.V2RayXHTTPOptions{Mode: "stream-one"},
+		getRequestURL:  requestURL,
+		getRequestURL2: requestURL,
+		getHTTPClient: func() (DialerClient, *XmuxClient) {
+			return dialerClient, nil
+		},
+		getHTTPClient2: func() (DialerClient, *XmuxClient) {
+			return dialerClient, nil
+		},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	connection, err := client.DialContext(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requestCtx := <-dialerClient.contexts
+
+	cancel()
+	select {
+	case <-requestCtx.Done():
+		t.Fatal("expected established XHTTP connection to detach from the caller's dial context")
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	if err := connection.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-requestCtx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("expected closing the XHTTP connection to cancel its request context")
+	}
+}
+
+func TestClientDialContextRejectsAlreadyCanceledCaller(t *testing.T) {
+	dialerClient := &contextRecordingDialerClient{contexts: make(chan context.Context, 1)}
+	requestURL := func(string) url.URL {
+		return url.URL{Scheme: "http", Host: "example.test", Path: "/"}
+	}
+	client := &Client{
+		options:        &option.V2RayXHTTPOptions{Mode: "stream-one"},
+		getRequestURL:  requestURL,
+		getRequestURL2: requestURL,
+		getHTTPClient: func() (DialerClient, *XmuxClient) {
+			return dialerClient, nil
+		},
+		getHTTPClient2: func() (DialerClient, *XmuxClient) {
+			return dialerClient, nil
+		},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	connection, err := client.DialContext(ctx)
+	if connection != nil {
+		_ = connection.Close()
+		t.Fatal("expected an already canceled dial context not to return a connection")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context cancellation, got %v", err)
+	}
+	requestCtx := <-dialerClient.contexts
+	select {
+	case <-requestCtx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("expected the rejected connection request context to be canceled")
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -41,6 +42,7 @@ const (
 	defaultIdleTimeout    = 10 * time.Minute
 	defaultInterval       = 5 * time.Minute
 	defaultURLTest        = "https://www.gstatic.com/generate_204"
+	initialCycleDelay     = 8 * time.Second
 )
 
 // func RegisterService(registry *boxService.Registry) {
@@ -292,7 +294,9 @@ func (m *OutboundMonitoring) Start(stage adapter.StartStage) error {
 		}
 		for tag, outbound := range m.outbounds {
 			for _, dep := range outbound.dependencies {
-				m.outbounds[dep].dependenciesInverse = append(m.outbounds[dep].dependenciesInverse, tag)
+				if depState, exists := m.outbounds[dep]; exists {
+					depState.dependenciesInverse = append(depState.dependenciesInverse, tag)
+				}
 			}
 		}
 
@@ -332,9 +336,28 @@ func (m *OutboundMonitoring) Start(stage adapter.StartStage) error {
 
 		m.started = true
 		m.Touch()
+		if runtime.GOOS == "windows" {
+			m.scheduleInitialCycle()
+		}
 	}
 
 	return nil
+}
+
+func (m *OutboundMonitoring) scheduleInitialCycle() {
+	m.schedulerWG.Add(1)
+	go func() {
+		defer m.schedulerWG.Done()
+		timer := time.NewTimer(initialCycleDelay)
+		defer timer.Stop()
+		select {
+		case <-m.ctx.Done():
+			return
+		case <-timer.C:
+			m.infoURLTest("starting initial outbound monitoring cycle")
+			m.startCycleOnce()
+		}
+	}()
 }
 
 func (m *OutboundMonitoring) startTimerWorkers() {
@@ -383,25 +406,33 @@ func (m *OutboundMonitoring) TestNow(outboundTag string) error {
 }
 func (m *OutboundMonitoring) testNow(outboundTag string, priority bool) error {
 	m.infoURLTest("testing outbound ", outboundTag, " with priority: ", priority)
-	if grp, ok := m.groups[outboundTag]; ok {
-		for tag := range grp.outbounds {
-			m.testNow(tag, priority)
+	tags := make([]string, 0)
+	seen := make(map[string]bool)
+	var collect func(string)
+	collect = func(tag string) {
+		if seen[tag] {
+			return
 		}
-	} else {
-		state := m.getState(outboundTag)
-		if state == nil {
-			return errors.New("outbound not registered")
+		seen[tag] = true
+		if grp, ok := m.groups[tag]; ok {
+			for child := range grp.outbounds {
+				collect(child)
+			}
+		} else if m.getState(tag) != nil {
+			tags = append(tags, tag)
 		}
-
-		task := &testTask{
-			outboundTag: outboundTag,
-			cycleID:     m.cycleSeq,
-			priority:    priority,
-		}
-
-		if !m.enqueueTask(task) {
-			// return errors.New("test already queued")
-		}
+	}
+	collect(outboundTag)
+	if len(tags) == 0 {
+		return errors.New("outbound not registered")
+	}
+	cycleID := atomic.LoadUint64(&m.cycleSeq)
+	resultCh, expected := m.enqueueStage(cycleID, tags, priority)
+	if expected > 0 {
+		go func() {
+			outcomes := m.awaitStage(resultCh, expected)
+			m.retryFailedSerially(cycleID, outcomes, priority)
+		}()
 	}
 	return nil
 }
@@ -541,6 +572,12 @@ func (m *OutboundMonitoring) executeTask(task *testTask) {
 	if state.testing {
 		state.mu.Unlock()
 		m.warnURLTest("outbound ", task.outboundTag, " URL test already running, skipping duplicate task")
+		if task.resultCh != nil {
+			select {
+			case task.resultCh <- testOutcome{outboundTag: task.outboundTag, err: errors.New("URL test already running"), skipped: true}:
+			case <-m.ctx.Done():
+			}
+		}
 		return
 	}
 	state.testing = true
@@ -569,12 +606,10 @@ func (m *OutboundMonitoring) executeTask(task *testTask) {
 	defer cancel()
 	resultCh := make(chan testOutcome, 1)
 	go func() {
-		defer func() {
-			state.mu.Lock()
-			state.testing = false
-			state.mu.Unlock()
-		}()
 		delay, err := m.tester(taskCtx, task.outboundTag)
+		state.mu.Lock()
+		state.testing = false
+		state.mu.Unlock()
 		resultCh <- testOutcome{
 			outboundTag: task.outboundTag,
 			history:     delay,
@@ -604,7 +639,9 @@ func (m *OutboundMonitoring) executeTask(task *testTask) {
 		}
 	}
 
-	m.applyResult(outcome)
+	if outcome.err == nil || !task.deferFailure {
+		m.applyResult(outcome)
+	}
 	if task.resultCh != nil {
 		select {
 		case task.resultCh <- outcome:
@@ -690,14 +727,20 @@ func (m *OutboundMonitoring) runCycle() {
 
 	for idx, _ := range m.urls {
 		outcomes := m.runStage(cycleID, tags)
+		m.retryFailedSerially(cycleID, outcomes, false)
 		success := 0
+		tested := 0
 		for _, result := range outcomes {
+			if result.skipped {
+				continue
+			}
+			tested++
 			if result.err == nil {
 				success++
 			}
 		}
-		m.logURLTestSummary(cycleID, m.urls[idx], len(outcomes), success)
-		if success > 0 || idx == len(m.urls)-1 {
+		m.logURLTestSummary(cycleID, m.urls[idx], tested, success)
+		if success > 0 || tested == 0 || idx == len(m.urls)-1 {
 			return
 		}
 		m.currentLinkIndex.Store((m.currentLinkIndex.Load() + 1) % uint32(len(m.urls)))
@@ -772,6 +815,11 @@ func (m *OutboundMonitoring) logURLTestSummary(cycleID uint64, url string, total
 }
 
 func (m *OutboundMonitoring) runStage(cycleID uint64, tags []string) []testOutcome {
+	resultCh, expected := m.enqueueStage(cycleID, tags, false)
+	return m.awaitStage(resultCh, expected)
+}
+
+func (m *OutboundMonitoring) enqueueStage(cycleID uint64, tags []string, priority bool) (chan testOutcome, int) {
 	resultCh := make(chan testOutcome, len(tags))
 
 	expected := 0
@@ -782,10 +830,11 @@ func (m *OutboundMonitoring) runStage(cycleID uint64, tags []string) []testOutco
 		}
 
 		task := &testTask{
-			outboundTag: tag,
-			cycleID:     cycleID,
-			priority:    false,
-			resultCh:    resultCh,
+			outboundTag:  tag,
+			cycleID:      cycleID,
+			priority:     priority,
+			deferFailure: true,
+			resultCh:     resultCh,
 		}
 		if m.enqueueTask(task) {
 			expected++
@@ -793,8 +842,11 @@ func (m *OutboundMonitoring) runStage(cycleID uint64, tags []string) []testOutco
 
 	}
 
-	results := make([]testOutcome, 0, expected)
+	return resultCh, expected
+}
 
+func (m *OutboundMonitoring) awaitStage(resultCh <-chan testOutcome, expected int) []testOutcome {
+	results := make([]testOutcome, 0, expected)
 	for expected > 0 {
 		select {
 		case <-m.ctx.Done():
@@ -806,6 +858,35 @@ func (m *OutboundMonitoring) runStage(cycleID uint64, tags []string) []testOutco
 	}
 
 	return results
+}
+
+// Retry only failures from the parallel pass, one at a time. A failed retry
+// remains failed; a successful retry replaces the transient failure.
+func (m *OutboundMonitoring) retryFailedSerially(cycleID uint64, outcomes []testOutcome, priority bool) {
+	for i := range outcomes {
+		if outcomes[i].err == nil || outcomes[i].skipped {
+			continue
+		}
+		resultCh := make(chan testOutcome, 1)
+		if !m.enqueueTask(&testTask{
+			outboundTag: outcomes[i].outboundTag,
+			cycleID:     cycleID,
+			priority:    priority,
+			resultCh:    resultCh,
+		}) {
+			m.applyResult(outcomes[i])
+			continue
+		}
+		select {
+		case <-m.ctx.Done():
+			return
+		case retry := <-resultCh:
+			outcomes[i] = retry
+		case <-time.After(2*m.urlTestTimeout + time.Second):
+			m.warnURLTest("outbound ", outcomes[i].outboundTag, " URL test retry did not complete")
+			m.applyResult(outcomes[i])
+		}
+	}
 }
 
 func (m *OutboundMonitoring) enqueueTask(task *testTask) bool {
@@ -1080,10 +1161,11 @@ func (m *OutboundMonitoring) getState(tag string) *outboundState {
 }
 
 type testTask struct {
-	outboundTag string
-	cycleID     uint64
-	priority    bool
-	resultCh    chan<- testOutcome
+	outboundTag  string
+	cycleID      uint64
+	priority     bool
+	deferFailure bool
+	resultCh     chan<- testOutcome
 }
 
 type testOutcome struct {
@@ -1091,6 +1173,7 @@ type testOutcome struct {
 	url         string
 	history     adapter.URLTestHistory
 	err         error
+	skipped     bool
 	cycleID     uint64
 	priority    bool
 }

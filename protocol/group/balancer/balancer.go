@@ -180,12 +180,19 @@ func (s *Balancer) DialContext(ctx context.Context, network string, destination 
 	if metadata != nil {
 		metadata.SetRealOutbound(outbound.Tag())
 	}
+	if s.options.LogSelectedOutbound {
+		s.logger.WarnContext(ctx, "balancer connection selected: group=", s.Tag(), " selected_outbound=", outbound.Tag(), " destination=", destination)
+	}
 
 	conn, err := outbound.DialContext(ctx, network, destination)
 	if err == nil {
 		return s.interruptGroup.NewConn(conn, interrupt.IsExternalConnectionFromContext(ctx)), nil
 	}
-	s.logger.ErrorContext(ctx, err)
+	if s.options.LogSelectedOutbound {
+		s.logger.ErrorContext(ctx, "balancer connection failed: group=", s.Tag(), " selected_outbound=", outbound.Tag(), " destination=", destination, " error=", err)
+	} else {
+		s.logger.ErrorContext(ctx, err)
+	}
 	s.monitor.InvalidateTest(outbound.Tag())
 
 	return nil, err
@@ -226,6 +233,20 @@ func (s *Balancer) NewConnectionEx(ctx context.Context, conn net.Conn, metadata 
 		return
 	}
 	metadata.SetRealOutbound(selected.Tag())
+	if s.options.LogSelectedOutbound {
+		// An encrypted stream can fail in the application after this layer sees a clean close.
+		// Record the node at selection time so the application's error can be correlated.
+		s.logger.WarnContext(ctx, "balancer connection selected: group=", s.Tag(), " selected_outbound=", selected.Tag(), " source=", metadata.Source, " destination=", metadata.Destination)
+		previousOnClose := onClose
+		onClose = func(err error) {
+			if err != nil {
+				s.logger.ErrorContext(ctx, "balancer connection failed: group=", s.Tag(), " selected_outbound=", selected.Tag(), " source=", metadata.Source, " destination=", metadata.Destination, " error=", err)
+			}
+			if previousOnClose != nil {
+				previousOnClose(err)
+			}
+		}
+	}
 	conn = s.interruptGroup.NewConn(conn, interrupt.IsExternalConnectionFromContext(ctx))
 	if outboundHandler, isHandler := selected.(adapter.ConnectionHandlerEx); isHandler {
 		outboundHandler.NewConnectionEx(ctx, conn, metadata, onClose)

@@ -45,10 +45,20 @@ func (s *ConsistentHashing) UpdateOutboundsInfo(history map[string]*adapter.URLT
 		res[net] = acceptableDelay
 	}
 	s.mu.Lock()
+	changed := false
+	for network, outbounds := range s.outbounds {
+		for _, outbound := range outbounds {
+			tag := outbound.Tag()
+			if isAlive(s.delays, s.maxAcceptableDelay, tag, network) != isAlive(delayMap, res, tag, network) {
+				changed = true
+				break
+			}
+		}
+	}
 	s.delays = delayMap
 	s.maxAcceptableDelay = res
 	s.mu.Unlock()
-	return true
+	return changed
 }
 func (g *ConsistentHashing) Select(metadata adapter.InboundContext, net string, touch bool) adapter.Outbound {
 	g.mu.Lock()
@@ -78,9 +88,11 @@ func (g *ConsistentHashing) Select(metadata adapter.InboundContext, net string, 
 }
 
 func (s *ConsistentHashing) Alive(proxy adapter.Outbound, net string) bool {
-	if delay, ok := s.delays[proxy.Tag()]; ok {
-		return delay <= s.maxAcceptableDelay[net]
-	}
-	return false
+	return isAlive(s.delays, s.maxAcceptableDelay, proxy.Tag(), net)
 
+}
+
+func isAlive(delays map[string]uint16, limits map[string]uint16, tag, network string) bool {
+	delay, ok := delays[tag]
+	return ok && delay <= limits[network]
 }

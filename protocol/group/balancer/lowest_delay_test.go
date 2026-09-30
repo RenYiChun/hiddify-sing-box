@@ -113,3 +113,21 @@ func TestRoundRobinBootstrapsBeforeValidHistory(t *testing.T) {
 		t.Fatal("expected selectable bootstrap round-robin outbound when every history is invalid")
 	}
 }
+
+func TestRoundRobinSkipsFailedNodeWhenAnotherNodeIsHealthy(t *testing.T) {
+	strategy := NewRoundRobin([]adapter.Outbound{
+		testOutbound{tag: "healthy", networks: []string{N.NetworkTCP}},
+		testOutbound{tag: "failed", networks: []string{N.NetworkTCP}},
+	}, option.BalancerOutboundOptions{DelayAcceptableRatio: 2})
+	strategy.UpdateOutboundsInfo(map[string]*adapter.URLTestHistory{
+		"healthy": {Delay: 180},
+		"failed":  {Delay: monitoring.TimeoutDelay},
+	})
+
+	for range 4 {
+		selected := strategy.Select(adapter.InboundContext{}, N.NetworkTCP, true)
+		if selected == nil || selected.Tag() != "healthy" {
+			t.Fatalf("expected healthy node after a failed test, got %v", selected)
+		}
+	}
+}

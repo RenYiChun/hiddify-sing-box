@@ -1,17 +1,69 @@
 package xhttp
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/sagernet/sing-box/option"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
 )
+
+func TestH1UploadsReuseAndCloseIdleConnection(t *testing.T) {
+	var opened atomic.Int32
+	var closed atomic.Int32
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil || string(body) != "payload" {
+			t.Errorf("unexpected upload body %q: %v", body, err)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	server.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		switch state {
+		case http.StateNew:
+			opened.Add(1)
+		case http.StateClosed:
+			closed.Add(1)
+		}
+	}
+	server.Start()
+	defer server.Close()
+
+	client := createHTTPClient(M.ParseSocksaddr(server.Listener.Addr().String()), N.SystemDialer, &option.V2RayXHTTPBaseOptions{}, nil).(*DefaultDialerClient)
+	uploadTransport := client.uploadClient.Transport.(*http.Transport)
+	if got := uploadTransport.MaxConnsPerHost; got != 4 {
+		t.Fatalf("expected bounded HTTP/1.1 upload pool, got %d", got)
+	}
+	for range 2 {
+		if err := client.PostPacket(context.Background(), server.URL, bytes.NewReader([]byte("payload")), 7); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := opened.Load(); got != 1 {
+		t.Fatalf("expected HTTP/1.1 upload connection reuse, got %d connections", got)
+	}
+	if err := client.Close(); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.After(time.Second)
+	for closed.Load() != opened.Load() {
+		select {
+		case <-deadline:
+			t.Fatalf("expected idle upload connection to close, opened=%d closed=%d", opened.Load(), closed.Load())
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
 
 type testClosableRoundTripper struct {
 	closeCount     int

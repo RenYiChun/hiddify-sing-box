@@ -4,14 +4,18 @@ import (
 	"context"
 	"errors"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/common/urltest"
+	"github.com/sagernet/sing-box/hiddify/ipinfo"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
 	M "github.com/sagernet/sing/common/metadata"
@@ -89,6 +93,26 @@ func TestExecuteTaskTimesOutBlockedURLTest(t *testing.T) {
 	}
 }
 
+func TestDuplicateTaskReportsSkippedResultToBatch(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	monitor := &OutboundMonitoring{
+		ctx:       ctx,
+		logger:    log.NewNOPFactory().NewLogger("monitoring"),
+		outbounds: map[string]*outboundState{"busy": {testing: true}},
+	}
+	resultCh := make(chan testOutcome, 1)
+	monitor.executeTask(&testTask{outboundTag: "busy", resultCh: resultCh})
+	select {
+	case outcome := <-resultCh:
+		if !outcome.skipped || outcome.err == nil {
+			t.Fatalf("expected a skipped duplicate result, got %+v", outcome)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("duplicate task left the batch waiting for a result")
+	}
+}
+
 var _ adapter.Outbound = blockingTestOutbound{}
 
 type readyTestOutbound struct {
@@ -162,7 +186,179 @@ func TestInterfaceUpdatedDoesNotStartRegularCycle(t *testing.T) {
 	}
 }
 
+func TestInitialCycleKeepsFreshSelectedNodeResult(t *testing.T) {
+	now := time.Now()
+	monitor := &OutboundMonitoring{
+		mainInterval: 10 * time.Minute,
+		outbounds: map[string]*outboundState{
+			"selected":      {outbound: readyTestOutbound{tag: "selected"}, history: adapter.URLTestHistory{Time: now, Delay: 180}},
+			"pending":       {outbound: readyTestOutbound{tag: "pending"}, invalid: true},
+			"failed":        {outbound: readyTestOutbound{tag: "failed"}, history: adapter.URLTestHistory{Time: now, Delay: TimeoutDelay}, invalid: true},
+			"§hide§ hidden": {outbound: readyTestOutbound{tag: "§hide§ hidden"}, invalid: true},
+		},
+		groups: map[string]*groupState{},
+	}
+
+	tags := monitor.collectCycleTargets()
+	if len(tags) != 2 || !containsTag(tags, "pending") || !containsTag(tags, "failed") {
+		t.Fatalf("expected only untested and failed visible nodes, got %v", tags)
+	}
+}
+
+func containsTag(tags []string, wanted string) bool {
+	for _, tag := range tags {
+		if tag == wanted {
+			return true
+		}
+	}
+	return false
+}
+
 var _ adapter.Outbound = readyTestOutbound{}
+
+type retryTestOutbound struct {
+	readyTestOutbound
+	address      string
+	failAttempts int32
+	attempts     atomic.Int32
+}
+
+func (o *retryTestOutbound) DialContext(ctx context.Context, network string, _ M.Socksaddr) (net.Conn, error) {
+	if o.attempts.Add(1) <= o.failAttempts {
+		return nil, errors.New("transient dial failure")
+	}
+	return (&net.Dialer{}).DialContext(ctx, network, o.address)
+}
+
+func TestFailedParallelURLTestsRetrySerially(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	address := strings.TrimPrefix(server.URL, "http://")
+	stable := &retryTestOutbound{readyTestOutbound: readyTestOutbound{tag: "stable"}, address: address}
+	transient := &retryTestOutbound{readyTestOutbound: readyTestOutbound{tag: "transient"}, address: address, failAttempts: 2}
+	persistent := &retryTestOutbound{readyTestOutbound: readyTestOutbound{tag: "persistent"}, address: address, failAttempts: 100}
+	monitor := &OutboundMonitoring{
+		ctx:            ctx,
+		logger:         log.NewNOPFactory().NewLogger("monitoring"),
+		urls:           []string{server.URL},
+		urlTestTimeout: time.Second,
+		history:        urltest.NewHistoryStorage(),
+		outbounds:      make(map[string]*outboundState),
+		groups:         make(map[string]*groupState),
+		priorityQueue:  make(chan *testTask, 3),
+		normalQueue:    make(chan *testTask, 3),
+	}
+	for _, outbound := range []*retryTestOutbound{stable, transient, persistent} {
+		monitor.outbounds[outbound.Tag()] = &outboundState{
+			outbound: outbound,
+			history:  adapter.URLTestHistory{IpInfo: &ipinfo.IpInfo{}},
+		}
+	}
+	monitor.workerWG.Add(3)
+	for range 3 {
+		go monitor.workerLoop()
+	}
+	defer func() {
+		cancel()
+		monitor.workerWG.Wait()
+	}()
+
+	outcomes := monitor.runStage(10, []string{stable.Tag(), transient.Tag(), persistent.Tag()})
+	if len(outcomes) != 3 {
+		t.Fatalf("expected three first-pass results, got %d", len(outcomes))
+	}
+	for _, tag := range []string{transient.Tag(), persistent.Tag()} {
+		state := monitor.outbounds[tag]
+		state.mu.Lock()
+		failedBeforeRetry := state.invalid || state.history.Delay == TimeoutDelay
+		state.mu.Unlock()
+		if failedBeforeRetry {
+			t.Fatalf("first-pass failure for %s should not be published before retry", tag)
+		}
+	}
+	monitor.retryFailedSerially(10, outcomes, false)
+	results := make(map[string]testOutcome)
+	for _, outcome := range outcomes {
+		results[outcome.outboundTag] = outcome
+	}
+	if results[stable.Tag()].err != nil || results[transient.Tag()].err != nil {
+		t.Fatalf("stable and transient outbounds should succeed: %+v", results)
+	}
+	if results[persistent.Tag()].err == nil {
+		t.Fatal("persistent failure should remain failed after one retry")
+	}
+	if state := monitor.outbounds[persistent.Tag()]; !state.invalid || state.history.Delay != TimeoutDelay {
+		t.Fatal("persistent retry failure should be published")
+	}
+	if stable.attempts.Load() != 1 || transient.attempts.Load() != 3 || persistent.attempts.Load() != 4 {
+		t.Fatalf("unexpected dial attempts: stable=%d transient=%d persistent=%d",
+			stable.attempts.Load(), transient.attempts.Load(), persistent.attempts.Load())
+	}
+}
+
+func TestPriorityGroupRetriesTransientFailure(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	address := strings.TrimPrefix(server.URL, "http://")
+	stable := &retryTestOutbound{readyTestOutbound: readyTestOutbound{tag: "stable"}, address: address}
+	transient := &retryTestOutbound{readyTestOutbound: readyTestOutbound{tag: "transient"}, address: address, failAttempts: 2}
+	monitor := &OutboundMonitoring{
+		ctx:            ctx,
+		logger:         log.NewNOPFactory().NewLogger("monitoring"),
+		urls:           []string{server.URL},
+		urlTestTimeout: time.Second,
+		history:        urltest.NewHistoryStorage(),
+		outbounds: map[string]*outboundState{
+			stable.Tag():    {outbound: stable, history: adapter.URLTestHistory{IpInfo: &ipinfo.IpInfo{}}},
+			transient.Tag(): {outbound: transient, history: adapter.URLTestHistory{IpInfo: &ipinfo.IpInfo{}}},
+		},
+		groups: map[string]*groupState{
+			"group": {outbounds: map[string]struct{}{stable.Tag(): {}, transient.Tag(): {}}},
+		},
+		priorityQueue: make(chan *testTask, 2),
+		normalQueue:   make(chan *testTask, 2),
+	}
+	monitor.workerWG.Add(3)
+	for range 3 {
+		go monitor.workerLoop()
+	}
+	defer func() {
+		cancel()
+		monitor.workerWG.Wait()
+	}()
+
+	if err := monitor.testNow("group", true); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.After(2 * time.Second)
+	for {
+		state := monitor.outbounds[transient.Tag()]
+		state.mu.Lock()
+		passed := transient.attempts.Load() == 3 && !state.history.Time.IsZero() && state.history.Delay < TimeoutDelay && !state.invalid
+		state.mu.Unlock()
+		if passed {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("priority group did not recover transient failure; attempts=%d", transient.attempts.Load())
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	if stable.attempts.Load() != 1 {
+		t.Fatalf("successful priority test should not be retried; attempts=%d", stable.attempts.Load())
+	}
+}
 
 func TestURLTestFailureUsesSeparateLogFile(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())

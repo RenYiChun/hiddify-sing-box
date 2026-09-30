@@ -1,7 +1,6 @@
 package xhttp
 
 import (
-	"bufio"
 	"io"
 	"net"
 	"net/http"
@@ -72,19 +71,6 @@ func (c *splitConn) SetReadDeadline(t time.Time) error {
 func (c *splitConn) SetWriteDeadline(t time.Time) error {
 	// TODO cannot do anything useful
 	return nil
-}
-
-type H1Conn struct {
-	UnreadedResponsesCount int
-	RespBufReader          *bufio.Reader
-	net.Conn
-}
-
-func NewH1Conn(conn net.Conn) *H1Conn {
-	return &H1Conn{
-		RespBufReader: bufio.NewReader(conn),
-		Conn:          conn,
-	}
 }
 
 type httpServerConn struct {

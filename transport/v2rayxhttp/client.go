@@ -9,7 +9,6 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -345,6 +344,7 @@ func createHTTPClient(dest M.Socksaddr, dialer N.Dialer, options *option.V2RayXH
 		keepAlivePeriod = time.Duration(options.Xmux.HKeepAlivePeriod) * time.Second
 	}
 	var transport http.RoundTripper
+	var uploadClient *http.Client
 	switch httpVersion {
 	case "3":
 		if keepAlivePeriod == 0 {
@@ -389,6 +389,13 @@ func createHTTPClient(dest M.Socksaddr, dialer N.Dialer, options *option.V2RayXH
 		httpDialContext := func(ctxInner context.Context, network string, addr string) (net.Conn, error) {
 			return dialContext(ctxInner)
 		}
+		uploadClient = &http.Client{Transport: &http.Transport{
+			DialTLSContext:      httpDialContext,
+			DialContext:         httpDialContext,
+			MaxIdleConnsPerHost: 4,
+			MaxConnsPerHost:     4,
+			IdleConnTimeout:     net.ConnIdleTimeout,
+		}}
 		transport = &http.Transport{
 			DialTLSContext:  httpDialContext,
 			DialContext:     httpDialContext,
@@ -403,9 +410,8 @@ func createHTTPClient(dest M.Socksaddr, dialer N.Dialer, options *option.V2RayXH
 		client: &http.Client{
 			Transport: transport,
 		},
-		httpVersion:    httpVersion,
-		uploadRawPool:  &sync.Pool{},
-		dialUploadConn: dialContext,
+		httpVersion:  httpVersion,
+		uploadClient: uploadClient,
 	}
 	return client
 }

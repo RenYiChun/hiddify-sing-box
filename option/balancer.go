@@ -10,4 +10,5 @@ type BalancerOutboundOptions struct {
 	DelayAcceptableRatio      float64            `json:"delay_acceptable_ratio,omitempty"`
 	TTL                       badoption.Duration `json:"ttl,omitempty"`
 	MaxRetry                  int                `json:"max_retry,omitempty"` //not implemented yet
+	LogSelectedOutbound       bool               `json:"log_selected_outbound,omitempty"` // Keep the chosen node visible when the application reports a stream failure.
 }

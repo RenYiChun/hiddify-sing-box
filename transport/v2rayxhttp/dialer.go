@@ -1,17 +1,14 @@
 package xhttp
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptrace"
-	"sync"
 	"sync/atomic"
 
-	common "github.com/sagernet/sing-box/common/xray"
 	"github.com/sagernet/sing-box/common/xray/signal/done"
 	"github.com/sagernet/sing-box/option"
 )
@@ -29,13 +26,11 @@ type DialerClient interface {
 
 // implements xhttp.DialerClient in terms of direct network connections
 type DefaultDialerClient struct {
-	options     *option.V2RayXHTTPBaseOptions
-	client      *http.Client
-	closed      atomic.Bool
-	httpVersion string
-	// pool of net.Conn, created using dialUploadConn
-	uploadRawPool  *sync.Pool
-	dialUploadConn func(ctxInner context.Context) (net.Conn, error)
+	options      *option.V2RayXHTTPBaseOptions
+	client       *http.Client
+	uploadClient *http.Client
+	closed       atomic.Bool
+	httpVersion  string
 }
 
 type closeableRoundTripper interface {
@@ -56,7 +51,9 @@ func (c *DefaultDialerClient) Close() error {
 			c.client.CloseIdleConnections()
 		}
 	}
-	c.uploadRawPool = &sync.Pool{}
+	if c.uploadClient != nil {
+		c.uploadClient.CloseIdleConnections()
+	}
 	return err
 }
 
@@ -117,65 +114,24 @@ func (c *DefaultDialerClient) PostPacket(ctx context.Context, url string, body i
 	}
 	req.ContentLength = contentLength
 	req.Header = c.options.GetRequestHeader(url)
-	if c.httpVersion != "1.1" {
-		resp, err := c.client.Do(req)
-		if err != nil {
-			c.closed.Store(true)
-			return err
-		}
-		io.Copy(io.Discard, resp.Body)
-		defer resp.Body.Close()
-	} else {
-		// stringify the entire HTTP/1.1 request so it can be
-		// safely retried. if instead req.Write is called multiple
-		// times, the body is already drained after the first
-		// request
-		requestBuff := new(bytes.Buffer)
-		common.Must(req.Write(requestBuff))
-		var uploadConn any
-		var h1UploadConn *H1Conn
-		for {
-			uploadConn = c.uploadRawPool.Get()
-			newConnection := uploadConn == nil
-			if newConnection {
-				newConn, err := c.dialUploadConn(ctx)
-				if err != nil {
-					return err
-				}
-				h1UploadConn = NewH1Conn(newConn)
-				uploadConn = h1UploadConn
-			} else {
-				h1UploadConn = uploadConn.(*H1Conn)
-
-				// TODO: Replace 0 here with a config value later
-				// Or add some other condition for optimization purposes
-				if h1UploadConn.UnreadedResponsesCount > 0 {
-					resp, err := http.ReadResponse(h1UploadConn.RespBufReader, req)
-					if err != nil {
-						c.closed.Store(true)
-						return fmt.Errorf("error while reading response: %s", err.Error())
-					}
-					io.Copy(io.Discard, resp.Body)
-					defer resp.Body.Close()
-					if resp.StatusCode != 200 {
-						return fmt.Errorf("got non-200 error response code: %d", resp.StatusCode)
-					}
-				}
-			}
-			_, err := h1UploadConn.Write(requestBuff.Bytes())
-			// if the write failed, we try another connection from
-			// the pool, until the write on a new connection fails.
-			// failed writes to a pooled connection are normal when
-			// the connection has been closed in the meantime.
-			if err == nil {
-				break
-			} else if newConnection {
-				return err
-			}
-		}
-		c.uploadRawPool.Put(uploadConn)
+	client := c.client
+	if c.httpVersion == "1.1" {
+		client = c.uploadClient
 	}
-
+	resp, err := client.Do(req)
+	if err != nil {
+		c.closed.Store(true)
+		return err
+	}
+	defer resp.Body.Close()
+	if _, err = io.Copy(io.Discard, resp.Body); err != nil {
+		c.closed.Store(true)
+		return err
+	}
+	if resp.StatusCode != http.StatusOK {
+		c.closed.Store(true)
+		return fmt.Errorf("got non-200 error response code: %d", resp.StatusCode)
+	}
 	return nil
 }
 
